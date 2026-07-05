@@ -1,0 +1,65 @@
+# Distance and communication constraints (Eqs 4-7, 23)
+C1: 50.0              # communication range (meters)
+C_task: 30.0          # subtask collaboration range (meters)
+R_reach: 100.0        # agent reach to subtask target (meters)
+C2: 5.0               # collision avoidance threshold (meters)
+
+# CQM weights (Eq 18)
+cqi_weights:
+  w1: 0.4             # packet loss weight
+  w2: 0.35            # latency weight
+  w3: 0.25            # bandwidth weight
+
+# CQM calibration bounds
+latency:
+  tau_min: 0.01       # seconds (stable baseline)
+  tau_max: 2.0        # seconds (degraded baseline)
+bandwidth_window: 10  # W_B sliding window size
+
+# ACDS hysteresis thresholds (Eqs 20-21)
+acds:
+  cqi_crossover: 0.65
+  delta: 0.08         # hysteresis band half-width
+  persistence_window: 5  # N consecutive intervals
+
+# Coalition feasibility (Eqs 24-25)
+gamma_min: 0.3
+
+# Agent kinematics
+kinematics:
+  uav:
+    max_speed: 15.0
+    max_turn_rate: 1.5
+  vehicle:
+    max_speed: 10.0
+    max_turn_rate: 0.8
+  robot:
+    max_speed: 3.0
+    max_turn_rate: 2.0
+
+# CA transfer overlap window (Eq 30)
+ca_overlap_delta: 3   # timesteps
+
+# Scenarios
+scenarios:
+  logistics:
+    num_uav: 3
+    num_vehicle: 2
+    num_robot: 2
+    num_subtasks: 6
+    comm_delay_prob: 0.0
+    packet_loss_rate: 0.0
+  inspection:
+    num_uav: 4
+    num_vehicle: 2
+    num_robot: 3
+    num_subtasks: 8
+    comm_delay_prob: 0.10
+    packet_loss_rate: 0.01
+  search_rescue:
+    num_uav: 5
+    num_vehicle: 3
+    num_robot: 4
+    num_subtasks: 10
+    comm_delay_prob: 0.05
+    packet_loss_rate: 0.005

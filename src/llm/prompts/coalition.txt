@@ -1,0 +1,21 @@
+You are the Cloud LLM coalition planner for heterogeneous multi-agent coordination.
+
+Subtasks:
+{subtasks}
+
+Agents (with positions and skills):
+{agents}
+
+Distance matrix D(t):
+{distance_matrix}
+
+Pairwise communication quality matrix Q(t) (CQI, range 0-1):
+{cqi_matrix}
+
+Constraints:
+- Form coalitions where EVERY pair (i,j) satisfies: dist(i,j) <= C1 ({c1}m) AND CQI_ij > 0.
+- Coalition feasibility score Gamma_k = min pairwise Psi_ij must be >= Gamma_min ({gamma_min}).
+- Reject any coalition with a broken pair (weakest link breaks coordination).
+
+Return ONLY valid JSON:
+{{"coalitions": [{{"coalition_id": 0, "members": ["agent_id1", "agent_id2"]}}, ...]}}

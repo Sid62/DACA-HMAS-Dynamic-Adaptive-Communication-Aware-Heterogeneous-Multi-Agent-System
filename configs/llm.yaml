@@ -1,0 +1,30 @@
+cloud:
+  provider: openai          # openai | anthropic
+  model: gpt-4o
+  max_tokens: 1024
+  temperature: 0.2
+  api_key_env: OPENAI_API_KEY
+
+device:
+  provider: ollama          # ollama | vllm
+  model: llama3.1:8b
+  base_url: http://localhost:11434
+  max_tokens: 512
+  temperature: 0.1
+  num_gpu: -1               # -1 = use all GPU layers (Ollama)
+  memory_mb: 8192           # reported in metrics Table III
+
+# Set false to use real Cloud API + local GPU Device LLM
+use_mock: true
+
+cache_responses: true
+cache_dir: .llm_cache
+
+# --- GPU production profile (uncomment and set use_mock: false) ---
+# device:
+#   provider: vllm
+#   model: meta-llama/Llama-3.1-8B-Instruct
+#   base_url: http://localhost:8000/v1
+#   max_tokens: 512
+#   temperature: 0.1
+#   memory_mb: 16384
