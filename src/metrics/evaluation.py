@@ -27,6 +27,17 @@ class ExperimentMetrics:
     tfr: float = 1.0
     cfr: float = 1.0
     switch_count: int = 0
+    peer_messages: int = 0
+    broadcast_count: int = 0
+    consensus_rounds: int = 0
+    consensus_latency: float = 0.0
+    plan_merge_count: int = 0
+    distributed_replanning_count: int = 0
+    replanning_count: int = 0
+    local_reallocation_count: int = 0
+    cached_plan_reuse_count: int = 0
+    avg_planning_latency: float = 0.0
+    coalition_change_count: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -43,6 +54,19 @@ class ExperimentMetrics:
             "tfr": round(self.tfr, 4),
             "cfr": round(self.cfr, 4),
             "switch_count": self.switch_count,
+            "peer_messages": self.peer_messages,
+            "broadcast_count": self.broadcast_count,
+            "consensus_rounds": self.consensus_rounds,
+            "consensus_latency": round(self.consensus_latency, 4),
+            "plan_merge_count": self.plan_merge_count,
+            "distributed_replanning_count": self.distributed_replanning_count,
+            "cloud_planning_calls": self.cloud_api_calls,
+            "device_planning_calls": self.device_api_calls,
+            "replanning_count": self.replanning_count,
+            "local_reallocation_count": self.local_reallocation_count,
+            "cached_plan_reuse_count": self.cached_plan_reuse_count,
+            "avg_planning_latency": round(self.avg_planning_latency, 4),
+            "coalition_change_count": self.coalition_change_count,
         }
 
 
@@ -67,6 +91,17 @@ class MetricsCollector:
         scenario: str,
         network_profile: str,
         seed: int,
+        peer_messages: int = 0,
+        broadcast_count: int = 0,
+        consensus_rounds: int = 0,
+        consensus_latency: float = 0.0,
+        plan_merge_count: int = 0,
+        distributed_replanning_count: int = 0,
+        replanning_count: int = 0,
+        local_reallocation_count: int = 0,
+        cached_plan_reuse_count: int = 0,
+        avg_planning_latency: float = 0.0,
+        coalition_change_count: int = 0,
     ) -> ExperimentMetrics:
         m = ExperimentMetrics(
             config_name=config_name,
@@ -86,6 +121,17 @@ class MetricsCollector:
             tfr=float(np.mean(tfr_history)) if tfr_history else 1.0,
             cfr=float(np.mean(cfr_history)) if cfr_history else 1.0,
             switch_count=switch_count,
+            peer_messages=peer_messages,
+            broadcast_count=broadcast_count,
+            consensus_rounds=consensus_rounds,
+            consensus_latency=consensus_latency,
+            plan_merge_count=plan_merge_count,
+            distributed_replanning_count=distributed_replanning_count,
+            replanning_count=replanning_count,
+            local_reallocation_count=local_reallocation_count,
+            cached_plan_reuse_count=cached_plan_reuse_count,
+            avg_planning_latency=avg_planning_latency,
+            coalition_change_count=coalition_change_count,
         )
         self.records.append(m)
         return m
@@ -110,6 +156,8 @@ class MetricsCollector:
                 "tfr_mean": float(np.mean([g.tfr for g in group])),
                 "cfr_mean": float(np.mean([g.cfr for g in group])),
                 "sc_mean": float(np.mean([g.switch_count for g in group])),
+                "peer_messages_mean": float(np.mean([g.peer_messages for g in group])),
+                "consensus_rounds_mean": float(np.mean([g.consensus_rounds for g in group])),
                 "n_seeds": len(group),
             }
         return result

@@ -5,10 +5,13 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from typing import Any
+from dotenv import load_dotenv
 
 import yaml
 
-_ROOT = Path(__file__).resolve().parent.parent.parent
+_ROOT = Path(__file__).resolve().parent.parent
+load_dotenv(_ROOT / ".env", override=True)
+
 _CONFIGS = _ROOT / "configs"
 
 

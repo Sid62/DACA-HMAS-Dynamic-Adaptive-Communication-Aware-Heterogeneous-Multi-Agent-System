@@ -7,6 +7,8 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from src.llm.exceptions import ExperimentFailed
+
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -44,7 +46,11 @@ def main() -> None:
             config=config,
             max_steps=args.max_steps,
         )
-        metrics = orch.run()
+        try:
+          metrics = orch.run()
+        except ExperimentFailed as e:
+          print(f"[FAILED] Seed {seed}: {e}")
+          continue
         collector.records.append(metrics)
         result_path = out_dir / f"{args.config}_{args.scenario}_{args.profile}_s{seed}.json"
         with open(result_path, "w", encoding="utf-8") as f:

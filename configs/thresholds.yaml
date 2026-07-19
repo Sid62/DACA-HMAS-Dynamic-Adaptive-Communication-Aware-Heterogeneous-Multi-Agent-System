@@ -63,3 +63,30 @@ scenarios:
     num_subtasks: 10
     comm_delay_prob: 0.05
     packet_loss_rate: 0.005
+
+
+# CA transfer overlap window (Eq 30)
+ca_overlap_delta: 3   # timesteps
+
+# Goal 1: lightweight network realism
+network:
+  communication_range: 50
+  good_range: 20
+  medium_range: 40
+  wireless_jitter: 0.05
+  environment_factor:
+    warehouse: 1.0
+    urban: 1.15
+    disaster: 1.35
+
+# Goal 2: lightweight battery model (movement-proportional drain, speed cut only)
+battery:
+  enabled: false
+  drain_rate: 0.002
+  low_threshold: 20
+  low_speed_factor: 0.8
+
+# Goal 3: occasional dynamic scenario events
+scenario:
+  communication_events: true
+  priority_update_probability: 0.10

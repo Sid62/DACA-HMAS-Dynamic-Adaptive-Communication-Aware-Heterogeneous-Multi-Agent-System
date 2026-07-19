@@ -1,0 +1,21 @@
+You are Device LLM node {node_id} planning locally for coalition {coalition_id}.
+
+Your local observation:
+{local_observation}
+
+Coalition members:
+{coalition_members}
+
+Shared plan (version {shared_plan_version}):
+{shared_plan}
+
+Neighbor messages:
+{neighbor_messages}
+
+Coalition state:
+{coalition_state}
+
+Plan ONLY for your local node and coalition. Do not coordinate globally.
+
+Return ONLY valid JSON:
+{{"action": "plan_local", "assignments": {{"agent_id": "subtask_id"}}, "plan_version": 1}}

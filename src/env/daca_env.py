@@ -43,9 +43,11 @@ class DACAEnv:
             c2=thresholds.get("C2", 5.0),
             seed=seed,
         )
+        
         self.network = NetworkConditionGenerator.from_scenario(
             scenario_name, network_profile, thresholds, seed, max_steps
         )
+        self.network.fleet = self.fleet  # connect network model to fleet (Goal 1 wiring)
         self.state = EnvState()
         self._subtasks = {s.subtask_id: s for s in self.scenario.subtasks}
 
@@ -59,6 +61,7 @@ class DACAEnv:
             c2=self.thresholds.get("C2", 5.0),
             seed=self.seed,
         )
+        self.network.fleet = self.fleet  # re-connect after fleet rebuild
         self._subtasks = {s.subtask_id: s for s in self.scenario.subtasks}
         return self.get_observation()
 
@@ -91,6 +94,7 @@ class DACAEnv:
     def mark_subtask_complete(self, subtask_id: str) -> None:
         if subtask_id in self._subtasks:
             self._subtasks[subtask_id].completed = True
+            print(f"[COMPLETE] {subtask_id}")
             if subtask_id not in self.state.completed_subtasks:
                 self.state.completed_subtasks.append(subtask_id)
 

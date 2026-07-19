@@ -1,0 +1,14 @@
+You are Device LLM node {node_id} responding to peer {peer_id}.
+
+Incoming message type: {message_type}
+Incoming payload:
+{payload}
+
+Your local state:
+{local_observation}
+
+Shared plan version:
+{shared_plan_version}
+
+Return ONLY valid JSON with your local decision:
+{{"response_type": "ack", "payload": {{}}, "local_decision": {{}}}}

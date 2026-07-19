@@ -34,23 +34,26 @@ def _make_subtasks(
     count: int,
     skill_sets: list[list[str]],
     seed_offset: int = 0,
+    priority_update_probability: float = 0.0,
 ) -> list[Subtask]:
     import numpy as np
 
     rng = np.random.default_rng(hash(name) % 2**31 + seed_offset)
     subtasks = []
     for j in range(count):
-        subtasks.append(
-            Subtask(
-                subtask_id=f"T_{j}",
-                description=f"{name} subtask {j}",
-                target=Position(
-                    x=float(rng.uniform(20, 180)),
-                    y=float(rng.uniform(20, 180)),
-                ),
-                required_skills=skill_sets[j % len(skill_sets)],
-            )
+        st = Subtask(
+            subtask_id=f"T_{j}",
+            description=f"{name} subtask {j}",
+            target=Position(
+                x=float(rng.uniform(20, 180)),
+                y=float(rng.uniform(20, 180)),
+            ),
+            required_skills=skill_sets[j % len(skill_sets)],
         )
+        # Goal 3: occasional, small, deterministic priority variation
+        if rng.random() < priority_update_probability:
+            st.priority = float(np.clip(st.priority + rng.uniform(-0.1, 0.1), 0.05, 0.95))
+        subtasks.append(st)
     return subtasks
 
 
@@ -64,6 +67,7 @@ def build_logistics_scenario(cfg: dict[str, Any], seed: int = 0) -> Scenario:
             ac.get("num_subtasks", 6),
             [["transport", "navigate"], ["lift", "transport"], ["navigate", "sense"]],
             seed,
+            cfg.get("scenario", {}).get("priority_update_probability", 0.0),
         ),
         agent_config={
             "num_uav": ac.get("num_uav", 3),

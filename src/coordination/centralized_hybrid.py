@@ -1,4 +1,4 @@
-"""Static Centralized Hybrid architecture (m=0)."""
+"""Static Centralized Hybrid architecture (m=0) with domain-level Device LLM dispatch."""
 
 from __future__ import annotations
 
@@ -18,13 +18,51 @@ from src.llm.device_llm_client import DeviceLLMClient
 
 @dataclass
 class CentralizedHybridCoordinator:
+    """
+    Centralized hybrid coordinator (m=0).
+
+    Cloud LLM performs decomposition, coalition formation, and global planning.
+    Each agent-type Device LLM receives the global coalition plan and dispatches
+    only to its managed agents. No peer communication or consensus.
+    """
+
     cloud_llm: CloudLLMClient
-    device_llm: DeviceLLMClient
+    device_llm: DeviceLLMClient | None = None
+    device_llms: dict[str, DeviceLLMClient] = field(default_factory=dict)
     decomposer: DistanceFeasibleDecomposer | None = None
     coalition_formation: CoalitionFormation | None = None
     nmpc: NMPCController = field(default_factory=NMPCController)
     use_distance_decomp: bool = False
     use_coalition_feasibility: bool = False
+
+    def __post_init__(self) -> None:
+        if self.device_llms:
+            if self.device_llm is None:
+                self.device_llm = next(iter(self.device_llms.values()), None)
+        elif self.device_llm is not None:
+            self.device_llms = {self.device_llm.node_id: self.device_llm}
+
+    @staticmethod
+    def _coalitions_for_domain(
+        coalitions: list[dict],
+        managed_agent_ids: set[str],
+    ) -> list[dict]:
+        """Slice global coalitions to members managed by one Device LLM domain."""
+        scoped: list[dict] = []
+        for coalition in coalitions:
+            members = coalition.get("members", [])
+            domain_members = [m for m in members if m in managed_agent_ids]
+            if domain_members:
+                scoped.append({**coalition, "members": domain_members})
+        return scoped
+
+    def _dispatch_domains(self, coalitions: list[dict]) -> None:
+        """Each domain Device LLM dispatches to its managed agents only."""
+        for client in self.device_llms.values():
+            managed = set(client.managed_agent_ids)
+            domain_coalitions = self._coalitions_for_domain(coalitions, managed)
+            if domain_coalitions:
+                client.dispatch(domain_coalitions, mode=0)
 
     def plan(
         self,
@@ -58,7 +96,7 @@ class CentralizedHybridCoordinator:
                 obs["subtasks"], obs["agents"]
             )
 
-        self.device_llm.dispatch(coalitions, mode=0)
+        self._dispatch_domains(coalitions)
         return assignments_map, coalitions
 
     def execute_step(

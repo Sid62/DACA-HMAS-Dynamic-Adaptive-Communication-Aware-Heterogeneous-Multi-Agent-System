@@ -38,7 +38,10 @@ class AgentState:
     completed_subtasks: list[str] = field(default_factory=list)
     remaining_waypoints: list[Position] = field(default_factory=list)
     coalition_id: int | None = None
-
+    # Goal 2: lightweight physical properties (no charging/RTB/planning logic attached)
+    battery: float = 100.0
+    communication_range: float = 50.0
+    sensor_range: float = 30.0
 
 def dist(p1: Position | np.ndarray, p2: Position | np.ndarray) -> float:
     """Euclidean distance (Eqs 4-5)."""
@@ -64,6 +67,22 @@ class KinematicsConfig:
     max_turn_rate: float
 
 
+def _load_battery_config() -> tuple[bool, float, float, float]:
+    """Optional battery-drain config (Goal 2)."""
+
+    try:
+        from src.config import get_thresholds
+        cfg = get_thresholds().get("battery", {})
+    except Exception:
+        cfg = {}
+
+    enabled = bool(cfg.get("enabled", False))
+    drain_rate = float(cfg.get("drain_rate", 0.0))
+    low_threshold = float(cfg.get("low_threshold", 20.0))
+    low_speed_factor = float(cfg.get("low_speed_factor", 1.0))
+
+    return enabled, drain_rate, low_threshold, low_speed_factor
+
 class AgentFleet:
     """Manages heterogeneous agent fleet evolution."""
 
@@ -73,12 +92,19 @@ class AgentFleet:
         kinematics: dict[str, KinematicsConfig],
         c1: float = 50.0,
         c2: float = 5.0,
+
     ):
         self.agents = agents
         self.kinematics = kinematics
         self.c1 = c1
         self.c2 = c2
         self._id_to_idx = {a.agent_id: i for i, a in enumerate(agents)}
+        (
+            self._battery_enabled,
+            self._battery_drain_rate,
+            self._low_battery_threshold,
+            self._low_battery_speed_factor,
+       ) = _load_battery_config()
 
     @property
     def n_agents(self) -> int:
@@ -102,9 +128,21 @@ class AgentFleet:
             agent.heading += math.copysign(max_turn, heading_diff)
         else:
             agent.heading = desired_heading
-        agent.speed = min(kcfg.max_speed, math.hypot(dx, dy))
+        max_speed = kcfg.max_speed
+        if self._battery_enabled and agent.battery < self._low_battery_threshold:
+            max_speed *= self._low_battery_speed_factor
+        agent.speed = min(max_speed, math.hypot(dx, dy))
         agent.position.x += agent.speed * math.cos(agent.heading) * dt
         agent.position.y += agent.speed * math.sin(agent.heading) * dt
+        if self._battery_enabled:
+            moved = agent.speed * dt
+            agent.battery = max(0.0, agent.battery - moved * self._battery_drain_rate)
+        print(
+            f"[MOVE] {agent.agent_id} "
+            f"Pos=({agent.position.x:.2f},{agent.position.y:.2f}) "
+            f"Speed={agent.speed:.2f} "
+            f"Battery={agent.battery:.1f}"
+       )
 
     def check_proximity_constraint(self) -> bool:
         """Eq 6: inter-team proximity constraint g."""

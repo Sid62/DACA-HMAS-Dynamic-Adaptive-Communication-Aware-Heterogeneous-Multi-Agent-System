@@ -52,7 +52,8 @@ class NMPCController:
                 planned[agent_id] = self.plan_waypoint(
                     fleet, agent_id, targets[subtask_id]
                 )
-        self.pid.step(fleet, assignments, planned)
+        identity_assignments = {agent_id: agent_id for agent_id in planned}
+        self.pid.step(fleet, identity_assignments, planned)
 
     @property
     def active(self) -> bool:

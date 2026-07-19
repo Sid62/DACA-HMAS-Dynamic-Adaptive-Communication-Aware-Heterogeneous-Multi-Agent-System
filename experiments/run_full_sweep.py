@@ -7,6 +7,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from src.llm.exceptions import ExperimentFailed
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -52,7 +53,15 @@ def main() -> None:
                         config=CONFIGS[cfg_name],
                         max_steps=args.max_steps,
                     )
-                    metrics = orch.run()
+                    try:
+                       metrics = orch.run()
+                    except ExperimentFailed as e:
+                       print(
+                           f"[FAILED] "
+                           f"{cfg_name}/{scenario}/{profile}/s{seed}: {e}"
+                       )
+                       continue
+
                     collector.records.append(metrics)
                     done += 1
                     print(

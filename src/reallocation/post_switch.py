@@ -1,12 +1,20 @@
-"""Post-switch coalition reallocation (Eq 31)."""
+"""Post-switch coalition reallocation with domain-level leader-peer consensus."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
 
 from src.coalition.formation import CoalitionFormation
+from src.communication.models import (
+    discover_agent_type_domains,
+    dominant_domain_for_coalition,
+    domains_in_coalition,
+)
+from src.communication.peer_manager import PeerCommunicationManager
 from src.env.agents import AgentFleet
 from src.env.scenarios import Subtask
 from src.llm.device_llm_client import DeviceLLMClient
@@ -14,8 +22,29 @@ from src.llm.device_llm_client import DeviceLLMClient
 
 @dataclass
 class PostSwitchReallocator:
-    device_llm: DeviceLLMClient
-    coalition_formation: CoalitionFormation
+    device_llms: dict[str, DeviceLLMClient] = field(default_factory=dict)
+    coalition_formation: CoalitionFormation | None = None
+    peer_manager: PeerCommunicationManager | None = None
+
+    @property
+    def device_llm(self) -> DeviceLLMClient:
+        """Backward-compatible single Device LLM accessor."""
+        if not self.device_llms:
+            return DeviceLLMClient(node_id="device_0")
+        return next(iter(self.device_llms.values()))
+
+    def _domain_client(
+        self, domain: str, fleet: AgentFleet
+    ) -> DeviceLLMClient | None:
+        """Resolve Device LLM client for a domain (domain-keyed or legacy per-agent)."""
+        client = self.device_llms.get(domain)
+        if client is not None:
+            return client
+        for agent_id in discover_agent_type_domains(fleet).get(domain, []):
+            legacy = self.device_llms.get(agent_id)
+            if legacy is not None:
+                return legacy
+        return None
 
     def should_trigger(
         self,
@@ -28,10 +57,105 @@ class PostSwitchReallocator:
         """Eq 31: REALLOC(t*) indicator."""
         if not mode_changed:
             return False
+        if self.coalition_formation is None:
+            return False
         cfr = self.coalition_formation.compute_cfr(
             coalitions, fleet, distance_matrix, cqi_matrix
         )
         return cfr < 1.0
+
+    def _select_leader_domain(self, members: list[str], fleet: AgentFleet) -> str:
+        return dominant_domain_for_coalition(members, fleet)
+
+    def _coalition_agent_dicts(
+        self, members: list[str], fleet: AgentFleet
+    ) -> list[dict[str, Any]]:
+        member_set = set(members)
+        return [
+            a
+            for a in fleet.to_dict_list()
+            if str(a.get("agent_id", a.get("id", ""))) in member_set
+        ]
+
+    def _distributed_realloc_coalition(
+        self,
+        coalition: dict,
+        remaining: list[dict],
+        fleet: AgentFleet,
+        distance_matrix: np.ndarray,
+        cqi_matrix: np.ndarray,
+    ) -> dict:
+        """Leader domain proposes reallocation; peer domains validate; consensus updates."""
+        pm = self.peer_manager
+        members: list[str] = coalition.get("members", [])
+        if not members:
+            return coalition
+
+        leader_domain = self._select_leader_domain(members, fleet)
+        leader_client = self._domain_client(leader_domain, fleet)
+        if leader_client is None or pm is None:
+            return coalition
+
+        domains = domains_in_coalition(members, fleet)
+        peer_domains = [d for d in domains if d != leader_domain]
+
+        t0 = time.perf_counter()
+        proposal = leader_client.reallocate_remaining(
+            remaining,
+            self._coalition_agent_dicts(members, fleet),
+            distance_matrix.tolist(),
+            cqi_matrix.tolist(),
+            scope_to_managed=False,
+        )
+
+        if not proposal:
+            return coalition
+
+        pm.broadcast(
+            leader_domain,
+            "realloc_proposal",
+            {
+                "coalition_id": coalition.get("coalition_id"),
+                "proposal": proposal,
+                "leader_domain": leader_domain,
+            },
+        )
+
+        approvals = 0
+        required = max(len(peer_domains), 1)
+        for peer_domain in peer_domains:
+            peer_client = self._domain_client(peer_domain, fleet)
+            if peer_client is None:
+                continue
+            msgs = pm.receive_messages(peer_domain)
+            for msg in msgs:
+                if msg.message_type == "realloc_proposal":
+                    review = peer_client.review_peer_plan(
+                        leader_domain,
+                        {"proposal": msg.payload.get("proposal", [])},
+                        0,
+                    )
+                    approved = review.get("approved", True)
+                    pm.send_message(
+                        peer_domain,
+                        leader_domain,
+                        "realloc_validation",
+                        {"approved": approved, "review": review},
+                    )
+                    if approved:
+                        approvals += 1
+
+        pm.record_consensus_round(time.perf_counter() - t0)
+
+        if approvals >= required // 2 or not peer_domains:
+            new_members = coalition.get("members", [])
+            if proposal and isinstance(proposal, list) and proposal[0].get("members"):
+                new_members = proposal[0]["members"]
+            return {
+                "coalition_id": coalition.get("coalition_id"),
+                "members": new_members,
+            }
+        return coalition
 
     def reallocate(
         self,
@@ -41,7 +165,7 @@ class PostSwitchReallocator:
         distance_matrix: np.ndarray,
         cqi_matrix: np.ndarray,
     ) -> list[dict]:
-        """Reallocate remaining subtasks via Device LLM."""
+        """Reallocate remaining subtasks via distributed domain leader-peer consensus."""
         remaining = [
             {
                 "id": s.subtask_id,
@@ -54,14 +178,27 @@ class PostSwitchReallocator:
         if not remaining:
             return coalitions
 
+        if self.device_llms and self.peer_manager and len(self.device_llms) > 1:
+            self.peer_manager.record_distributed_replanning()
+            updated = []
+            for coalition in coalitions:
+                updated.append(
+                    self._distributed_realloc_coalition(
+                        coalition, remaining, fleet, distance_matrix, cqi_matrix
+                    )
+                )
+            if updated:
+                return updated
+
         new_coalitions = self.device_llm.reallocate_remaining(
             remaining,
             fleet.to_dict_list(),
             distance_matrix.tolist(),
             cqi_matrix.tolist(),
+            scope_to_managed=False,
         )
-        if not new_coalitions:
+        if not new_coalitions and self.coalition_formation:
             new_coalitions = self.coalition_formation.form(
                 fleet, subtasks, distance_matrix, cqi_matrix
             )
-        return new_coalitions
+        return new_coalitions or coalitions

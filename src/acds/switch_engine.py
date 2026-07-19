@@ -11,7 +11,7 @@ from typing import Any
 class ACDSSwitchEngine:
     """Architecture Control and Decision Switching with hysteresis."""
 
-    theta_down: float = 0.57
+    theta_down: float = 0.61
     theta_up: float = 0.73
     persistence_window: int = 5
     use_hysteresis: bool = True

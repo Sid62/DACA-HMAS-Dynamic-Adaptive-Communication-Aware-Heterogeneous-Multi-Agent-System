@@ -7,6 +7,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from src.llm.exceptions import ExperimentFailed
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -37,7 +38,11 @@ def main() -> None:
         config=config,
         max_steps=args.max_steps,
     )
-    metrics = orch.run()
+    try:
+      metrics = orch.run()
+    except ExperimentFailed as e:
+      print(f"[FAILED] {e}")
+      return
     result = metrics.to_dict()
     print(json.dumps(result, indent=2))
 
