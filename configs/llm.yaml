@@ -11,7 +11,7 @@ device:
   provider: ollama          # ollama | vllm
   model: llama3:latest
   base_url: http://localhost:11434
-  max_tokens: 512
+  max_tokens: 200
   temperature: 0.1
   num_gpu: -1               # -1 = use all GPU layers (Ollama)
   memory_mb: 8192           # reported in metrics Table III

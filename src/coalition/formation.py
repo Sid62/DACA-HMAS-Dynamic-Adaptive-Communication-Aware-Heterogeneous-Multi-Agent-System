@@ -24,6 +24,7 @@ class CoalitionFormation:
     c1: float = 50.0
     gamma_min: float = 0.3
     max_retries: int = 3
+    merged_singleton_count: int = 0
 
     def form(
         self,
@@ -62,11 +63,65 @@ class CoalitionFormation:
                 break
             coalitions.extend(self._repair_infeasible(infeasible, fleet, psi, id_to_idx))
 
+        coalitions = self._merge_singleton_coalitions(coalitions, fleet, psi, id_to_idx)
+
         for c in coalitions:
             for mid in c.get("members", []):
                 if mid in id_to_idx:
                     fleet.agents[id_to_idx[mid]].coalition_id = c.get("coalition_id")
         return coalitions
+    
+    def _merge_singleton_coalitions(
+        self,
+        coalitions: list[dict],
+        fleet: AgentFleet,
+        psi: np.ndarray,
+        id_to_idx: dict[str, int],
+    ) -> list[dict]:
+        """Merge singleton coalitions of the same agent-type domain into one
+        group whenever the combined group remains psi-feasible (Eq 25,
+        Gamma_k >= Gamma_min). Multi-member coalitions are left untouched;
+        this only removes the degenerate 1-agent-per-coalition case that
+        the feasibility check alone does not prevent. Domain match is used
+        as a compatible-skills proxy (agents of one type share the
+        scenario's per-type skill/kinematics profile).
+        """
+        singles = [c for c in coalitions if len(c.get("members", [])) == 1]
+        non_singles = [c for c in coalitions if len(c.get("members", [])) != 1]
+        if len(singles) < 2:
+            return coalitions
+
+        domain_of = {a.agent_id: a.agent_type.value for a in fleet.agents}
+        used: set[str] = set()
+        merged_groups: list[list[str]] = []
+        singles_sorted = sorted(singles, key=lambda c: c.get("members", [""])[0])
+
+        for i, c in enumerate(singles_sorted):
+            mid = c.get("members", [""])[0]
+            if mid in used or mid not in id_to_idx:
+                continue
+            group = [mid]
+            used.add(mid)
+            for other in singles_sorted[i + 1:]:
+                oid = other.get("members", [""])[0]
+                if oid in used or oid not in id_to_idx:
+                    continue
+                if domain_of.get(oid) != domain_of.get(mid):
+                    continue
+                trial_indices = [id_to_idx[m] for m in group + [oid]]
+                if coalition_feasibility_score(trial_indices, psi) >= self.gamma_min:
+                    group.append(oid)
+                    used.add(oid)
+            merged_groups.append(group)
+
+        result = list(non_singles)
+        for group in merged_groups:
+            result.append({"coalition_id": len(result), "members": group})
+            if len(group) > 1:
+                self.merged_singleton_count += len(group)
+        for i, c in enumerate(result):
+            c["coalition_id"] = i  # renumber to avoid id collisions after merge
+        return result
 
     def _repair_infeasible(
         self,

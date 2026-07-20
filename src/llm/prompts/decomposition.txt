@@ -16,5 +16,6 @@ Constraints:
 - Each assigned agent must be within R_reach ({r_reach}m) of the subtask target.
 - Match agent skills to subtask required skills.
 
-Return ONLY valid JSON:
+Be concise. Do not explain your reasoning. Do not add any text before orafter the JSON object. Keep the response under 150 tokens.
+Return ONLY this JSON object, with no other keys:
 {{"assignments": {{"T_0": ["agent_id", ...], "T_1": [...], ...}}}}

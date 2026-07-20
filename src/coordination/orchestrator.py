@@ -192,6 +192,8 @@ class DACAOrchestrator:
         start = time.perf_counter()
         self.env.reset()
         self._plan_state = PlanState()
+        self.decentralized.plan_reuse_count = 0
+        self.coalition_formation.merged_singleton_count = 0
         self._replanning_count = 0
         self._coalition_change_count = 0
         self._planning_latency_total = 0.0
@@ -406,10 +408,12 @@ class DACAOrchestrator:
             distributed_replanning_count=int(peer_metrics["distributed_replanning_count"]),
             replanning_count=self._replanning_count,
             local_reallocation_count=getattr(self.decentralized, "local_reallocation_count", 0),
-            cached_plan_reuse_count=self.cloud_llm.usage.cache_hits + device_usage.cache_hits,
+            cached_plan_reuse_count=self.decentralized.plan_reuse_count,
+            merged_singleton_count=self.coalition_formation.merged_singleton_count,
             avg_planning_latency=(
                 self._planning_latency_total / self._planning_latency_count
                 if self._planning_latency_count else 0.0
             ),
             coalition_change_count=self._coalition_change_count,
         )
+

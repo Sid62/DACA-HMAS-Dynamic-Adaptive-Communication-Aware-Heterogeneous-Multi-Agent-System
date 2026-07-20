@@ -36,6 +36,12 @@ class DecentralizedHybridCoordinator:
     use_coalition_feasibility: bool = False
     shared_plans: dict[int, SharedPlan] = field(default_factory=dict)
     local_reallocation_count: int = 0
+    #Optimization 3: per-coalition context cache used to skip redundant
+    #LLM planning cycles when a coalition's members/subtask/positions are
+    effectively unchanged since it was last actually planned.
+    _coalition_plan_context: dict[int, dict[str, Any]] = field(default_factory=dict)
+    position_delta_threshold: float = 5.0  # reuses C2 collision-avoidance scale
+    plan_reuse_count: int = 0
 
     @property
     def device_llm(self) -> DeviceLLMClient:
@@ -93,6 +99,76 @@ class DecentralizedHybridCoordinator:
 
     def _select_leader_domain(self, members: list[str], fleet: AgentFleet) -> str:
         return dominant_domain_for_coalition(members, fleet)
+    
+    def _coalition_assigned_subtasks(
+        self, members: list[str], assignments_map: dict[str, list[str]]
+    ) -> frozenset[str]:
+        member_set = set(members)
+        return frozenset(
+            sid
+            for sid, agents in assignments_map.items()
+            if any(a in member_set for a in agents)
+        )
+    
+    def _snapshot_coalition_context(
+        self,
+        coalition_id: int,
+        members: list[str],
+        env: DACAEnv,
+        assignments_map: dict[str, list[str]],
+    ) -> None:
+        positions = {
+            aid: (
+                env.fleet.get_agent(aid).position.x,
+                env.fleet.get_agent(aid).position.y,
+            )
+            for aid in members
+            if env.fleet.get_agent(aid) is not None
+        }
+    
+        self._coalition_plan_context[coalition_id] = {
+            "members": frozenset(members),
+            "subtasks": self._coalition_assigned_subtasks(members, assignments_map),
+            "positions": positions,
+        }
+    
+    def _coalition_context_changed(
+        self,
+        coalition_id: int,
+        members: list[str],
+        env: DACAEnv,
+        assignments_map: dict[str, list[str]],
+    ) -> bool:
+    
+        cached = self._coalition_plan_context.get(coalition_id)
+    
+        if cached is None:
+            return True
+    
+        if cached["members"] != frozenset(members):
+            return True
+    
+        if cached["subtasks"] != self._coalition_assigned_subtasks(members, assignments_map):
+            return True
+    
+        for aid in members:
+            agent = env.fleet.get_agent(aid)
+    
+            if agent is None:
+                return True
+    
+            old_pos = cached["positions"].get(aid)
+    
+            if old_pos is None:
+                return True
+
+            dx = agent.position.x - old_pos[0]
+            dy = agent.position.y - old_pos[1]
+    
+            if (dx * dx + dy * dy) ** 0.5 > self.position_delta_threshold:
+                return True
+    
+        return False
 
     def _update_domain_states(
         self,
@@ -399,12 +475,41 @@ class DecentralizedHybridCoordinator:
         self._local_reassign(env, assignments_map, coalitions, cqi_matrix)
         
         if self.device_llms and self.peer_manager:
-            for coalition in coalitions:
-                print("\nProcessing coalition")
-                print(coalition)
-                self._run_distributed_coalition_planning(
-                    coalition, env, assignments_map
+        for coalition in coalitions:
+    
+            coalition_id = int(coalition.get("coalition_id", 0))
+            members = coalition.get("members", [])
+    
+            if not self._coalition_context_changed(
+                coalition_id,
+                members,
+                env,
+                assignments_map,
+            ):
+                self.plan_reuse_count += 1
+    
+                print(
+                    f"[PLAN-REUSE] coalition_id={coalition_id} "
+                    f"context unchanged -- skipping LLM planning cycle"
                 )
+    
+                continue
+    
+            print("\nProcessing coalition")
+            print(coalition)
+    
+            self._run_distributed_coalition_planning(
+                coalition,
+                env,
+                assignments_map,
+            )
+    
+            self._snapshot_coalition_context(
+                coalition_id,
+                members,
+                env,
+                assignments_map,
+            )
         else:
             self.device_llm.coordinate_locally(
                 coalitions, self._fleet_observations(env)
