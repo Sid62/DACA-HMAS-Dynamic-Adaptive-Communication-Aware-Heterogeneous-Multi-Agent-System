@@ -19,8 +19,8 @@ bandwidth_window: 10  # W_B sliding window size
 # ACDS hysteresis thresholds (Eqs 20-21)
 acds:
   cqi_crossover: 0.65
-  delta: 0.08         # hysteresis band half-width
-  persistence_window: 5  # N consecutive intervals
+  delta: 0.04         # hysteresis band half-width
+  persistence_window: 4  # N consecutive intervals
 
 # Coalition feasibility (Eqs 24-25)
 gamma_min: 0.3
