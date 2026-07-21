@@ -19,8 +19,8 @@ bandwidth_window: 10  # W_B sliding window size
 # ACDS hysteresis thresholds (Eqs 20-21)
 acds:
   cqi_crossover: 0.65
-  delta: 0.08         # hysteresis band half-width
-  persistence_window: 5  # N consecutive intervals
+  delta: 0.04        # hysteresis band half-width
+  persistence_window: 4  # N consecutive intervals
 
 # Coalition feasibility (Eqs 24-25)
 gamma_min: 0.3
@@ -81,6 +81,12 @@ network:
   good_range: 20
   medium_range: 40
   wireless_jitter: 0.05
+  oscillation_period: 60        # steps per congestion/recovery cycle
+  base_quality: 0.75            # mean channel quality (dimensionless, [0,1])
+  quality_amplitude: 0.20       # macro-cycle swing around base_quality
+  distance_quality_floor: 0.5   # multi-hop relay floor; distance attenuates, never severs
+  interference_dip_factor: 0.6  # temporary multiplicative dip during interference windows
+  fading_correlation: 0.85      # AR(1) coherence -- higher = smoother fading
   environment_factor:
     warehouse: 1.0
     urban: 1.15
