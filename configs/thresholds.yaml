@@ -20,8 +20,13 @@ packet_loss_window: 20 # W_B sliding window size
 # ACDS hysteresis thresholds (Eqs 20-21)
 acds:
   cqi_crossover: 0.65
+<<<<<<< HEAD
   delta: 0.04        # hysteresis band half-width
   persistence_window: 4  # N consecutive intervals
+=======
+  delta: 0.04
+  persistence_window: 4
+>>>>>>> bab24308a210a9964ae8a6b0cdb6fbab4f5ace1e
 
 # Coalition feasibility (Eqs 24-25)
 gamma_min: 0.3
