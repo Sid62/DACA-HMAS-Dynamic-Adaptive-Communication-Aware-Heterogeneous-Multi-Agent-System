@@ -1,0 +1,14 @@
+{
+  "experiment_status": "DEGRADED",
+  "failure_reason": "RateLimit",
+  "provider": "groq",
+  "model": "llama-3.3-70b-versatile",
+  "scenario": "inspection",
+  "architecture": "B1",
+  "network_profile": "oscillatory",
+  "seed": 2,
+  "simulation_step": 103,
+  "retry_count": 3,
+  "exception_type": "RateLimitError",
+  "timestamp": "2026-07-21T18:37:33Z"
+}

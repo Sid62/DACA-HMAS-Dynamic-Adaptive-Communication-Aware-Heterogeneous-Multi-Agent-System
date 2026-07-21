@@ -1,9 +1,18 @@
 
+#cloud:
+#  provider: nvidia
+#  api_key_env: NVIDIA_API_KEY
+#  base_url: https://integrate.api.nvidia.com/v1
+#  model: meta/llama-3.1-8b-instruct
+#  temperature: 0.2
+#  max_tokens: 1024
+#  timeout: 420
+
 cloud:
-  provider: nvidia
-  api_key_env: NVIDIA_API_KEY
-  base_url: https://integrate.api.nvidia.com/v1
-  model: meta/llama-3.1-8b-instruct
+  provider: groq
+  api_key_env: GROQ_API_KEY
+  base_url: https://api.groq.com/openai/v1
+  model: llama-3.3-70b-versatile
   temperature: 0.2
   max_tokens: 1024
   timeout: 420
