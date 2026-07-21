@@ -66,6 +66,17 @@ class NetworkConditionGenerator:
         default_factory=lambda: {"warehouse": 1.0, "urban": 1.15, "disaster": 1.35}
     )
     _comm_interference_windows: list[tuple[int, int]] = field(default_factory=list)
+    # --- Bounded oscillatory channel-quality model (replaces unbounded
+    # additive degradation stacking). All bounded in [0,1] to prevent any
+    # single factor from permanently dominating the others.
+    oscillation_period: float = 60.0       # steps per congestion/recovery cycle
+    base_quality: float = 0.75             # mean channel quality (dimensionless)
+    quality_amplitude: float = 0.20        # macro-cycle swing around base_quality
+    distance_quality_floor: float = 0.5    # multi-hop relay floor -- distance
+                                            # attenuates but never fully severs
+    interference_dip_factor: float = 0.6   # temporary multiplicative dip, self-clearing
+    fading_correlation: float = 0.85       # AR(1) coherence across steps
+    _fading_state: float = field(default=0.0, init=False, repr=False)
 
     def _distance_degradation(self) -> float | None:
        """1 - link quality in [0, 1] from average inter-agent distance.
@@ -84,53 +95,101 @@ class NetworkConditionGenerator:
        )
        return 1.0 - quality
 
-    def loss_rate_at(self, t: int) -> float:
+    def _channel_quality(self, t: int) -> float:
+        """Single bounded latent channel-quality variable Q(t) in [0,1],
+        1.0 = perfect link. Every downstream metric (loss, latency,
+        bandwidth) is derived from this ONE quantity, so degradation
+        factors modulate a shared physical cause instead of stacking as
+        independent, unbounded penalties (Eqs are unaffected -- this only
+        changes how synthetic network conditions are generated upstream
+        of CQM's own computation).
+        """
+        # 1) Macro oscillatory cycle: congestion builds and recovers over
+        # `oscillation_period` steps. This is the DOMINANT, bounded signal
+        # -- profile selects how strongly/abruptly it behaves, but the
+        # amplitude is fixed so no profile can push quality outside a
+        # realistic band on its own.
         if self.profile == NetworkProfile.STABLE:
-            base = self.base_loss_rate
+            osc = 0.0
         elif self.profile == NetworkProfile.GRADUAL:
-            progress = t / max(self.total_steps, 1)
-            # return self.base_loss_rate + 0.10 * (0.5 + 0.5 * np.sin(2 * np.pi * t / 50))
-            base = self.base_loss_rate + 0.10 * (0.5 + 0.5 * np.sin(2 * np.pi * t / 50))
-            #base = self.base_loss_rate + 0.15 * progress
-            
+            osc = np.sin(2 * np.pi * t / self.oscillation_period)
         elif self.profile == NetworkProfile.SUDDEN:
-            base = self.base_loss_rate + (0.20 if t > self.total_steps * 0.4 else 0.0)
+            # A single congestion episode mid-mission, then recovery --
+            # bounded step, not a permanent floor shift.
+            in_episode = self.total_steps * 0.35 < t < self.total_steps * 0.65
+            osc = -0.8 if in_episode else 0.6
         elif self.profile == NetworkProfile.OSCILLATORY:
-            base = min(0.45, self.base_loss_rate + 0.40 * (0.5 + 0.5 * np.sin(2 * np.pi * t / 50)))
+            osc = np.sin(2 * np.pi * t / self.oscillation_period)
         else:
-            base = self.base_loss_rate
+            osc = 0.0
+        q_base = float(np.clip(self.base_quality + self.quality_amplitude * osc, 0.05, 0.98))
 
-        # Goal 1: distance / environment / jitter / interference (additive)
-        env_mult = environment_factor(self.environment, self.environment_factors)
-        degraded = base * env_mult
+        # 2) Scenario baseline (per-scenario packet_loss_rate/comm_delay_prob)
+        # contributes a small, BOUNDED downward pressure -- not stacked on
+        # top, folded into the same base term so scenarios remain
+        # differentiable without dominating the oscillation.
+        q_base = float(np.clip(q_base - 0.5 * self.base_loss_rate, 0.05, 0.98))
+
+        # 3) Distance: multiplicative modulator with a floor. Physically,
+        # real MANETs rely on multi-hop relaying -- distance attenuates
+        # SNR/throughput, it does not fully sever the link the way an
+        # unbounded additive penalty implies. The floor keeps a dispersed
+        # fleet from permanently pinning quality to its worst value.
         dist_deg = self._distance_degradation()
-        if dist_deg is not None:
-            degraded += 0.5 * dist_deg
-        if in_any_window(t, self._comm_interference_windows):
-            degraded += 0.15
-        degraded += wireless_jitter(self.rng, self.wireless_jitter_scale)
-        return float(np.clip(degraded, 0.0, 1.0))
+        if dist_deg is None:
+            q_dist = 1.0
+        else:
+            q_dist = self.distance_quality_floor + (1.0 - self.distance_quality_floor) * (1.0 - dist_deg)
+
+        # 4) Environment: bounded multiplicative attenuation (inverse of
+        # the existing badness factor -- warehouse=1.0 -> no attenuation,
+        # disaster=1.35 -> ~0.74x quality), same physical meaning as
+        # before, just applied as a bounded multiplier instead of an
+        # additive term that could compound past 1.0.
+        env_mult = environment_factor(self.environment, self.environment_factors)
+        q_env = float(np.clip(1.0 / max(env_mult, 1e-6), 0.5, 1.0))
+
+        # 5) Interference: a TEMPORARY multiplicative dip while the window
+        # is active, then self-clears -- matches real intermittent RF
+        # interference (e.g. co-channel equipment cycling on/off) rather
+        # than an additive step that never recovers.
+        q_interf = self.interference_dip_factor if in_any_window(t, self._comm_interference_windows) else 1.0
+
+        # 6) Small-scale (fast) fading: AR(1) mean-reverting process, the
+        # standard discrete-time approximation of Rayleigh/Rician fading
+        # with a finite coherence time. Bounded by construction (reverts
+        # toward 0 each step) -- unlike one-shot additive jitter, it
+        # cannot accumulate a permanent drift in either direction.
+        noise = self.rng.normal(0.0, 1.0)
+        self._fading_state = (
+            self.fading_correlation * self._fading_state
+            + np.sqrt(max(1.0 - self.fading_correlation ** 2, 0.0)) * noise
+        )
+        fading = self.wireless_jitter_scale * self._fading_state
+
+        q = q_base * q_dist * q_env * q_interf + fading
+        return float(np.clip(q, 0.05, 0.98))
+
+    def loss_rate_at(self, t: int) -> float:
+        q = self._channel_quality(t)
+        loss = 1.0 - q
+        return float(np.clip(loss, 0.0, 0.95))
  
     def latency_at(self, t: int) -> float:
-        loss = self.loss_rate_at(t)
+        q = self._channel_quality(t)
         base = 0.01 + self.base_delay_prob * 0.5
-        # return base + loss * 1.5 + self.rng.uniform(0, 0.02)
-        # latency = base + loss * 4.0 + self.rng.uniform(0, 0.05)
-        latency = base + loss * 1.5 + self.rng.uniform(0, 0.02)
-        dist_deg = self._distance_degradation()
-        if dist_deg is not None:
-            latency += dist_deg * 0.3
-        return latency
+        # Latency driven by the SAME channel quality that drives loss --
+        # physically both are downstream of the same SNR/throughput
+        # bottleneck, not independently-degrading quantities. Small
+        # independent measurement noise keeps latency from being a pure
+        # deterministic function of loss.
+        latency = base + (1.0 - q) * 1.5 + self.rng.uniform(0, 0.02)
+        return float(max(latency, 0.0))
 
     def bandwidth_at(self, t: int) -> float:
-        loss = self.loss_rate_at(t)
-        # return max(0.0, 1.0 - loss - self.base_delay_prob * 0.3)
-        # bw = max(0.15, 1.0 - 1.8 * loss - self.base_delay_prob)
-        bw = max(0.0, 1.0 - loss - self.base_delay_prob * 0.3)
-        dist_deg = self._distance_degradation()
-        if dist_deg is not None:
-            bw = max(0.10, bw - 0.3 * dist_deg)
-        return bw
+        q = self._channel_quality(t)
+        bw = q - self.base_delay_prob * 0.3
+        return float(np.clip(bw, 0.10, 1.0))
  
     def simulate_message(
         self, t: int, payload_bytes: float = 256.0
@@ -190,4 +249,10 @@ class NetworkConditionGenerator:
                 "environment_factor", {"warehouse": 1.0, "urban": 1.15, "disaster": 1.35}
             ),
             _comm_interference_windows=windows,
+            oscillation_period=net_cfg.get("oscillation_period", 60.0),
+            base_quality=net_cfg.get("base_quality", 0.75),
+            quality_amplitude=net_cfg.get("quality_amplitude", 0.20),
+            distance_quality_floor=net_cfg.get("distance_quality_floor", 0.5),
+            interference_dip_factor=net_cfg.get("interference_dip_factor", 0.6),
+            fading_correlation=net_cfg.get("fading_correlation", 0.85),
         )
