@@ -38,7 +38,7 @@ class DecentralizedHybridCoordinator:
     local_reallocation_count: int = 0
     #Optimization 3: per-coalition context cache used to skip redundant
     #LLM planning cycles when a coalition's members/subtask/positions are
-    effectively unchanged since it was last actually planned.
+    #effectively unchanged since it was last actually planned.
     _coalition_plan_context: dict[int, dict[str, Any]] = field(default_factory=dict)
     position_delta_threshold: float = 5.0  # reuses C2 collision-avoidance scale
     plan_reuse_count: int = 0
@@ -244,7 +244,14 @@ class DecentralizedHybridCoordinator:
 
         self._update_domain_states(env, members, domains, shared.version)
 
-        leader_msgs = pm.receive_messages(leader_domain)
+        drained = pm.receive_messages(leader_domain)
+        leader_msgs = [
+            m for m in drained
+            if m.payload.get("coalition_id") in (None, coalition_id)
+        ]
+        stray = [m for m in drained if m not in leader_msgs]
+        if stray:
+            pm.inboxes.setdefault(leader_domain, []).extend(stray)
         leader_client.ingest_messages(leader_msgs)
 
         print(f"[COALITION-PLAN] coalition_id={coalition_id} leader={leader_domain} "
@@ -279,7 +286,14 @@ class DecentralizedHybridCoordinator:
             peer_client = self._domain_client(peer_domain, env.fleet)
             if peer_client is None:
                 continue
-            msgs = pm.receive_messages(peer_domain)
+            drained_peer = pm.receive_messages(peer_domain)
+            msgs = [
+                m for m in drained_peer
+                if m.payload.get("coalition_id") in (None, coalition_id)
+            ]
+            stray_peer = [m for m in drained_peer if m not in msgs]
+            if stray_peer:
+                pm.inboxes.setdefault(peer_domain, []).extend(stray_peer)
             peer_client.ingest_messages(msgs)
             for msg in msgs:
                 if msg.message_type == "plan_proposal":
@@ -475,41 +489,41 @@ class DecentralizedHybridCoordinator:
         self._local_reassign(env, assignments_map, coalitions, cqi_matrix)
         
         if self.device_llms and self.peer_manager:
-        for coalition in coalitions:
+            for coalition in coalitions:
     
-            coalition_id = int(coalition.get("coalition_id", 0))
-            members = coalition.get("members", [])
+                coalition_id = int(coalition.get("coalition_id", 0))
+                members = coalition.get("members", [])
+        
+                if not self._coalition_context_changed(
+                    coalition_id,
+                    members,
+                    env,
+                    assignments_map,
+                ):
+                    self.plan_reuse_count += 1
+        
+                    print(
+                        f"[PLAN-REUSE] coalition_id={coalition_id} "
+                        f"context unchanged -- skipping LLM planning cycle"
+                    )
+        
+                    continue
     
-            if not self._coalition_context_changed(
-                coalition_id,
-                members,
-                env,
-                assignments_map,
-            ):
-                self.plan_reuse_count += 1
+                print("\nProcessing coalition")
+                print(coalition)
     
-                print(
-                    f"[PLAN-REUSE] coalition_id={coalition_id} "
-                    f"context unchanged -- skipping LLM planning cycle"
+                self._run_distributed_coalition_planning(
+                    coalition,
+                    env,
+                    assignments_map,
                 )
     
-                continue
-    
-            print("\nProcessing coalition")
-            print(coalition)
-    
-            self._run_distributed_coalition_planning(
-                coalition,
-                env,
-                assignments_map,
-            )
-    
-            self._snapshot_coalition_context(
-                coalition_id,
-                members,
-                env,
-                assignments_map,
-            )
+                self._snapshot_coalition_context(
+                    coalition_id,
+                    members,
+                    env,
+                    assignments_map,
+                )
         else:
             self.device_llm.coordinate_locally(
                 coalitions, self._fleet_observations(env)

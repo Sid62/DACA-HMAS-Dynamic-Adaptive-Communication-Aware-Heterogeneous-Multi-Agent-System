@@ -35,9 +35,11 @@ class ExperimentMetrics:
     distributed_replanning_count: int = 0
     replanning_count: int = 0
     local_reallocation_count: int = 0
-    cached_plan_reuse_count: int = 0
+    
     avg_planning_latency: float = 0.0
     coalition_change_count: int = 0
+    cached_plan_reuse_count: int = 0
+    merged_singleton_count: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -65,6 +67,7 @@ class ExperimentMetrics:
             "replanning_count": self.replanning_count,
             "local_reallocation_count": self.local_reallocation_count,
             "cached_plan_reuse_count": self.cached_plan_reuse_count,
+            "merged_singleton_count": self.merged_singleton_count,
             "avg_planning_latency": round(self.avg_planning_latency, 4),
             "coalition_change_count": self.coalition_change_count,
         }
@@ -100,6 +103,7 @@ class MetricsCollector:
         replanning_count: int = 0,
         local_reallocation_count: int = 0,
         cached_plan_reuse_count: int = 0,
+        merged_singleton_count: int = 0,
         avg_planning_latency: float = 0.0,
         coalition_change_count: int = 0,
     ) -> ExperimentMetrics:
@@ -130,6 +134,7 @@ class MetricsCollector:
             replanning_count=replanning_count,
             local_reallocation_count=local_reallocation_count,
             cached_plan_reuse_count=cached_plan_reuse_count,
+            merged_singleton_count=merged_singleton_count,
             avg_planning_latency=avg_planning_latency,
             coalition_change_count=coalition_change_count,
         )

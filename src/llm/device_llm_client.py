@@ -140,6 +140,7 @@ class DeviceLLMClient:
                     "options": {
                         "temperature": device.get("temperature", 0.1),
                         "num_gpu": device.get("num_gpu", -1),
+                        "num_predict": device.get("max_tokens", 200),
                     },
                 },
             )
@@ -168,7 +169,7 @@ class DeviceLLMClient:
                 json={
                     "model": model,
                     "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": device.get("max_tokens", 512),
+                    "max_tokens": device.get("max_tokens", 200),
                     "temperature": device.get("temperature", 0.1),
                 },
             )
@@ -216,9 +217,16 @@ class DeviceLLMClient:
         except (ValueError, json.JSONDecodeError):
             return {}
 
-    def _observations_payload(self) -> dict[str, dict[str, Any]]:
-        """Per-agent observations for all robots managed by this domain."""
-        managed = self.managed_agent_ids or list(self.node_state.local_observations.keys())
+    def _observations_payload(
+        self, scope: list[str] | None = None
+    ) -> dict[str, dict[str, Any]]:
+        """Per-agent observations for robots managed by this domain.
+        If `scope` is given, restrict to those agent IDs only (used to keep
+        a coalition's prompt limited to its own members instead of every
+        agent this domain LLM manages)."""
+        managed = scope if scope else (
+            self.managed_agent_ids or list(self.node_state.local_observations.keys())
+        )
         if not managed:
             managed = [self.node_id]
         return {
@@ -277,13 +285,13 @@ class DeviceLLMClient:
         from src.llm.prompts import format_prompt
 
         domain_members = [m for m in coalition_members if m in self.managed_agent_ids]
-        obs_payload = self._observations_payload()
+        obs_payload = self._observations_payload(scope=domain_members)
         try:
             prompt = format_prompt(
                 "plan_local",
                 node_id=self.node_id,
                 coalition_id=str(coalition_id),
-                local_observation=self._observations_json(),
+                local_observation=json.dumps(obs_payload),
                 coalition_members=json.dumps(coalition_members),
                 shared_plan_version=str(shared_plan.version),
                 shared_plan=json.dumps(shared_plan.to_dict()),
@@ -511,7 +519,6 @@ class DeviceLLMClient:
         raw = self.complete(prompt)
         result = self._parse_json_response(raw)
         return result.get("coalitions", [])
-
 
 def aggregate_device_usage(device_llms: dict[str, DeviceLLMClient]) -> DeviceLLMUsage:
     total = DeviceLLMUsage()

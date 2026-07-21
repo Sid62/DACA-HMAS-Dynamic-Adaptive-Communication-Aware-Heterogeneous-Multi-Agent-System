@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
@@ -25,6 +25,8 @@ class CoalitionFormation:
     gamma_min: float = 0.3
     max_retries: int = 3
     merged_singleton_count: int = 0
+    _coalition_id_registry: dict[frozenset[str], int] = field(default_factory=dict)
+    _next_coalition_id: int = 0
 
     def form(
         self,
@@ -64,6 +66,7 @@ class CoalitionFormation:
             coalitions.extend(self._repair_infeasible(infeasible, fleet, psi, id_to_idx))
 
         coalitions = self._merge_singleton_coalitions(coalitions, fleet, psi, id_to_idx)
+        coalitions = self._stabilize_coalition_ids(coalitions)
 
         for c in coalitions:
             for mid in c.get("members", []):
@@ -122,6 +125,36 @@ class CoalitionFormation:
         for i, c in enumerate(result):
             c["coalition_id"] = i  # renumber to avoid id collisions after merge
         return result
+
+    def _stabilize_coalition_ids(
+        self,
+        coalitions: list[dict],
+    ) -> list[dict]:
+        stabilized = []
+        seen = set()
+    
+        for c in coalitions:
+            key = frozenset(c.get("members", []))
+            seen.add(key)
+    
+            if key not in self._coalition_id_registry:
+                self._coalition_id_registry[key] = self._next_coalition_id
+                self._next_coalition_id += 1
+    
+            stabilized.append({
+                **c,
+                "coalition_id": self._coalition_id_registry[key],
+            })
+    
+        stale = [
+            k for k in self._coalition_id_registry
+            if k not in seen
+        ]
+    
+        for k in stale:
+            del self._coalition_id_registry[k]
+    
+        return stabilized
 
     def _repair_infeasible(
         self,

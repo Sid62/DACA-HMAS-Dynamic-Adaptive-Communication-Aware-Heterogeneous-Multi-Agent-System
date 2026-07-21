@@ -52,6 +52,13 @@ def validate_joint_assignment(
     r_reach: float,
 ) -> bool:
     """Check all pairs in joint assignment satisfy delta = 1."""
+    valid_ids = set(fleet._id_to_idx.keys())
+
+    for aid in agent_ids:
+        if aid not in valid_ids:
+            print(f"[WARNING] Unknown agent id returned by planner: {aid}")
+            return False
+    
     agents = [fleet.get_agent(aid) for aid in agent_ids]
     if len(agents) <= 1:
         if agents:
@@ -116,19 +123,43 @@ class DistanceFeasibleDecomposer:
         raw_assignments = self.cloud_llm.decompose(
             instruction, agents_ctx, subtasks_ctx, dist_mat
         )
+        # Filter invalid agent IDs returned by the LLM
+        valid_ids = {a.agent_id for a in fleet.agents}
+
+        for task_id, ids in raw_assignments.items():
+            if isinstance(ids, str):
+                ids = [ids]
+
+            filtered = [aid for aid in ids if aid in valid_ids]
+
+            if len(filtered) != len(ids):
+                removed = set(ids) - set(filtered)
+                print(f"[WARNING] Invalid IDs for {task_id}: {removed}")
+
+            raw_assignments[task_id] = filtered
 
         validated: dict[str, list[str]] = {}
+
         for st in subtasks:
             sid = st.subtask_id
             candidates = raw_assignments.get(sid, [])
+
             if isinstance(candidates, str):
                 candidates = [candidates]
-            if validate_joint_assignment(candidates, st, fleet, self.c_task, self.r_reach):
+
+            if validate_joint_assignment(
+                candidates,
+                st,
+                fleet,
+                self.c_task,
+                self.r_reach,
+            ):
                 validated[sid] = candidates
             else:
                 best = self._find_feasible_agents(st, fleet)
                 if best:
                     validated[sid] = best
+
         return validated
 
     def _find_feasible_agents(

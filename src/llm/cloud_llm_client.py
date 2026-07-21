@@ -13,6 +13,7 @@ from typing import Any
 from src.config import get_llm_config, project_root
 from src.llm.exceptions import ExperimentFailed, FailureReport
 
+_FAILURE_SENTINEL = "__CLOUD_LLM_FAILURE__"
 
 def _log(msg: str) -> None:
     print(f"[LLM] {msg}")
@@ -22,6 +23,7 @@ def _log(msg: str) -> None:
 class LLMUsage:
     tokens: int = 0
     api_calls: int = 0
+    cache_hits: int = 0
 
 
 @dataclass
@@ -30,6 +32,12 @@ class CloudLLMClient:
     usage: LLMUsage = field(default_factory=LLMUsage)
     max_retries: int = 3
     backoff_base: float = 1.0  # seconds; sequence becomes 1, 2, 4
+
+    _last_assignments: dict[str, list[str]] = field(default_factory=dict, init=False, repr=False)
+    _last_coalitions: list[dict] = field(default_factory=list, init=False, repr=False)
+    device_fallback_decompose: Any = field(default=None, init=False, repr=False)
+    device_fallback_coalitions: Any = field(default=None, init=False, repr=False)
+    
 
     _client: Any = field(default=None, init=False, repr=False)
     _client_provider: str | None = field(default=None, init=False, repr=False)
@@ -110,6 +118,14 @@ class CloudLLMClient:
             import anthropic
             key = os.environ.get(cloud.get("api_key_env", "ANTHROPIC_API_KEY"))
             self._client = anthropic.Anthropic(api_key=key, timeout=timeout)
+        elif provider == "nvidia":
+            from openai import OpenAI
+            key = os.environ.get(cloud.get("api_key_env", "NVIDIA_API_KEY"))
+            self._client = OpenAI(
+                api_key=key,
+                base_url="https://integrate.api.nvidia.com/v1",
+                timeout=timeout,
+            )
         else:
             raise ValueError(f"Unknown provider: {provider}")
 
@@ -124,16 +140,12 @@ class CloudLLMClient:
         if cache_path:
             cached = self._read_cache(cache_path)
             if cached:
-                # Reuse of a PRIOR genuine LLM response for the identical
-                # prompt — not error recovery. See explanation section.
                 self.usage.tokens += cached.get("tokens", 0)
                 self.usage.api_calls += 1
+                self.usage.cache_hits += 1
                 return cached["response"]
 
         if self.config.get("use_mock", True):
-            # Explicit baseline experimental condition (e.g. B1/B2 configs),
-            # not a failure fallback. Only reached when the run was
-            # deliberately configured with use_mock: true.
             response = self._mock_response(prompt)
             tokens = len(prompt.split()) + len(response.split())
             self.usage.tokens += tokens
@@ -143,6 +155,8 @@ class CloudLLMClient:
             return response
 
         response, tokens = self._call_with_retries(prompt, system)
+        if response == _FAILURE_SENTINEL:
+            return response
         self.usage.tokens += tokens
         self.usage.api_calls += 1
         if cache_path:
@@ -198,7 +212,7 @@ class CloudLLMClient:
                 f"Exception Message: {last_err}"
             )
         report = FailureReport(
-            experiment_status="FAILED",
+            experiment_status="DEGRADED",
             failure_reason=self._classify_error(last_err) if last_err else "Unknown",
             provider=provider,
             model=model,
@@ -212,7 +226,11 @@ class CloudLLMClient:
         )
         report.log()
         report.persist()
-        raise ExperimentFailed(report)
+        _log(
+            "Retries exhausted -- degrading gracefully "
+            "(cache -> previous plan -> device LLM). Simulation continues."
+        )
+        return _FAILURE_SENTINEL, 0
 
     # ------------------------------------------------------------------
     # Raw provider call — UNCHANGED signature/behavior
@@ -222,12 +240,17 @@ class CloudLLMClient:
         provider = cloud.get("provider", "openai")
         client = self._get_client()
 
-        if provider in ("openai", "groq"):
+        if provider in ("openai", "groq", "nvidia"):
             messages = []
             if system:
                 messages.append({"role": "system", "content": system})
             messages.append({"role": "user", "content": prompt})
-            default_model = "llama-3.3-70b-versatile" if provider == "groq" else "gpt-4o"
+            if provider == "groq":
+                default_model = "llama-3.3-70b-versatile"
+            elif provider == "nvidia":
+                default_model = "meta/llama-3.1-8b-instruct"
+            else:
+                default_model = "gpt-4o"
             resp = client.chat.completions.create(
                 model=cloud.get("model", default_model),
                 messages=messages,
@@ -379,8 +402,27 @@ class CloudLLMClient:
                 f"Context: {json.dumps({'agents': agents, 'subtasks': subtasks, 'distance_matrix': distance_matrix})}\n"
                 'Return JSON: {"assignments": {"T_0": ["agent_ids"], ...}}'
             )
+        
         raw = self.complete(prompt, system="You are a Cloud LLM task decomposer.")
-        return self._parse_json(raw).get("assignments", {})
+        if raw == _FAILURE_SENTINEL:
+            _log("decompose() degraded: cloud LLM unavailable")
+            if self._last_assignments:
+                _log("Falling back to previous valid decomposition plan")
+                return self._last_assignments
+            if self.device_fallback_decompose is not None:
+                try:
+                    _log("Falling back to local Device LLM for decomposition")
+                    fallback = self.device_fallback_decompose(instruction, agents, subtasks)
+                    if fallback:
+                        return fallback
+                except Exception as e:  # noqa: BLE001
+                    _log(f"Device LLM fallback failed: {e}")
+            _log("No fallback available -- returning empty assignment, simulation continues")
+            return {}
+        result = self._parse_json(raw).get("assignments", {})
+        if result:
+            self._last_assignments = result
+        return result
 
     def form_coalitions(
         self,
@@ -413,7 +455,27 @@ class CloudLLMClient:
                 'Return JSON: {"coalitions": [{"coalition_id": 0, "members": ["id1"]}]}'
             )
         raw = self.complete(prompt, system="You are a Cloud LLM coalition planner.")
-        return self._parse_json(raw).get("coalitions", [])
+        if raw == _FAILURE_SENTINEL:
+            _log("form_coalitions() degraded: cloud LLM unavailable")
+            if self._last_coalitions:
+                _log("Falling back to previous valid coalitions")
+                return self._last_coalitions
+            if self.device_fallback_coalitions is not None:
+                try:
+                    _log("Falling back to local Device LLM for coalitions")
+                    fallback = self.device_fallback_coalitions(
+                        subtasks, agents, distance_matrix, cqi_matrix
+                    )
+                    if fallback:
+                        return fallback
+                except Exception as e:  # noqa: BLE001
+                    _log(f"Device LLM fallback failed: {e}")
+            _log("No fallback available -- returning empty coalitions, simulation continues")
+            return []
+        result = self._parse_json(raw).get("coalitions", [])
+        if result:
+            self._last_coalitions = result
+        return result
 
     def _parse_json(self, text: str) -> dict:
         try:

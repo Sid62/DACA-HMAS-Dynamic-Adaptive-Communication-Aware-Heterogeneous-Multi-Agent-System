@@ -282,7 +282,13 @@ class DACAOrchestrator:
                 sys_cqi=sys_cqi,
                 packet_loss=avg_packet_loss,
                 latency=avg_latency,
-                cqi_delta_threshold=self.thresholds.get("acds", {}).get("delta", 0.08),
+                cqi_delta_threshold=self.thresholds.get(
+                    "communication_change_threshold", 0.08
+                ),
+                current_step=step,
+                minimum_replanning_interval=self.thresholds.get(
+                    "minimum_replanning_interval", 0
+                ),
             )
         
             if replan_now:
@@ -316,6 +322,7 @@ class DACAOrchestrator:
                     sys_cqi=sys_cqi,
                     packet_loss=avg_packet_loss,
                     latency=avg_latency,
+                    current_step=step,
                 )
             else:
                 print(f"[REPLAN] step={step} skipped -- reusing existing plan")

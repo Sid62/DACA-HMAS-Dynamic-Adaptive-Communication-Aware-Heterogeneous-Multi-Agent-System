@@ -24,6 +24,13 @@ acds:
 
 # Coalition feasibility (Eqs 24-25)
 gamma_min: 0.3
+# Hierarchical planning policy thresholds
+planning_similarity_threshold: 0.85   # cosine-like overlap needed to reuse a cached cloud plan
+maximum_cached_plan_age: 15           # steps; force refresh even if similar
+minimum_replanning_interval: 3        # steps; suppress re-triggering within this window (except architecture switch)
+minimum_state_change: 0.05            # fraction of subtasks/agents that must differ to count as "changed"
+communication_change_threshold: 0.08  # reused as cqi_delta_threshold, now named per spec
+
 
 # Agent kinematics
 kinematics:
@@ -90,3 +97,4 @@ battery:
 scenario:
   communication_events: true
   priority_update_probability: 0.10
+

@@ -45,6 +45,7 @@ class PlanState:
     known_sys_cqi: float = 1.0
     known_packet_loss: float = 0.0
     known_latency: float = 0.0
+    last_replan_step: int = -9999
 
 
 def should_replan(
@@ -59,6 +60,9 @@ def should_replan(
     cqi_delta_threshold: float = 0.08,
     packet_loss_threshold: float = 0.3,
     latency_threshold: float = 0.5,
+    current_step: int = 0,
+    minimum_replanning_interval: int = 0,
+    
 ) -> tuple[bool, str]:
     """Return (True, reason) iff a mission event has occurred that can
     invalidate the currently stored plan; (False, "") otherwise, in which
@@ -78,6 +82,15 @@ def should_replan(
     # and must be re-derived, not merely re-executed.
     if mode != plan_state.known_mode:
         return True, f"architecture_switched:{plan_state.known_mode}->{mode}"
+    
+    # --- Rate limiter: everything below this line is subject to the
+    # minimum replanning interval. Architecture switch above is exempt
+    # because it is a safety/consistency requirement, not an optimization
+    # decision -- executing the wrong coordinator for the current mode is
+    # not something a cooldown should ever suppress.
+    steps_since_replan = current_step - plan_state.last_replan_step
+    if minimum_replanning_interval > 0 and steps_since_replan < minimum_replanning_interval:
+        return False, ""
 
     # --- Trigger 1c: Communication quality changed significantly ----------
     if abs(sys_cqi - plan_state.known_sys_cqi) > cqi_delta_threshold:
@@ -172,6 +185,25 @@ def should_replan(
         if not required.issubset(covered):
             return True, f"coalition_skill_regressed:{subtask_id}"
 
+    
+
+    # --- Trigger 6: Coalition membership changed underneath the plan ------
+    # If coalitions passed into this call (freshly computed by the caller,
+    # independent of whether a replan is happening) no longer match what
+    # the last accepted plan reasoned over, the stored plan's coalition
+    # boundaries are stale even though no agent failed and no skill gap
+    # opened up. This is a distinct correctness condition from Triggers
+    # 4/5 above -- it catches feasibility-driven regrouping, not loss.
+    # Compare membership as a SET OF GROUPS, not a dict keyed by coalition_id.
+    # This is robust even if coalition_id happens to be unstable for any
+    # reason (defense in depth on top of the id-stabilization fix) -- two
+    # coalition lists with the same groups of agents, in any id order, are
+    # considered unchanged.
+    current_groups = {frozenset(c.get("members", [])) for c in coalitions}
+    known_groups = set(plan_state.coalition_members.values())
+    if current_groups and current_groups != known_groups:
+        return True, "coalition_membership_changed"
+ 
     return False, ""
 
 
@@ -185,12 +217,14 @@ def update_plan_state(
     sys_cqi: float = 1.0,
     packet_loss: float = 0.0,
     latency: float = 0.0,
+    current_step: int = 0,
 ) -> None:
     """Record what the plan just returned by the Cloud LLM was reasoned
     over, so the next should_replan() call has a correct baseline to diff
     against. Called only immediately after a Cloud LLM call is accepted.
     """
     plan_state.initialized = True
+    plan_state.last_replan_step = current_step
     plan_state.known_mode = mode
     plan_state.known_sys_cqi = sys_cqi
     plan_state.known_packet_loss = packet_loss
