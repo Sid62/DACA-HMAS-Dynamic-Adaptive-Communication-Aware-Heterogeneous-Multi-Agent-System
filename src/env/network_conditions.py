@@ -97,71 +97,56 @@ class NetworkConditionGenerator:
 
     def _channel_quality(self, t: int) -> float:
         """Single bounded latent channel-quality variable Q(t) in [0,1],
-        1.0 = perfect link. Every downstream metric (loss, latency,
-        bandwidth) is derived from this ONE quantity, so degradation
-        factors modulate a shared physical cause instead of stacking as
-        independent, unbounded penalties (Eqs are unaffected -- this only
-        changes how synthetic network conditions are generated upstream
-        of CQM's own computation).
+        1.0 = perfect link. Downstream packet loss, latency, and bandwidth
+        are physical co-variates of Q(t).
         """
-        # 1) Macro oscillatory cycle: congestion builds and recovers over
-        # `oscillation_period` steps. This is the DOMINANT, bounded signal
-        # -- profile selects how strongly/abruptly it behaves, but the
-        # amplitude is fixed so no profile can push quality outside a
-        # realistic band on its own.
+        from src.env.network_model import rician_fading_step, scenario_shadowing
+
+        # 1) Profile-driven macro congestion & recovery dynamics
         if self.profile == NetworkProfile.STABLE:
             osc = 0.0
+            base_q = self.base_quality
+            amp = self.quality_amplitude
         elif self.profile == NetworkProfile.GRADUAL:
-            osc = np.sin(2 * np.pi * t / self.oscillation_period)
+            # Progressive channel degradation with periodic recovery
+            osc = np.sin(2.0 * np.pi * t / self.oscillation_period)
+            base_q = max(0.85 - 0.40 * (t / float(self.total_steps)), 0.30)
+            amp = 0.15
         elif self.profile == NetworkProfile.SUDDEN:
-            # A single congestion episode mid-mission, then recovery --
-            # bounded step, not a permanent floor shift.
+            # Sudden localized blackout episode mid-mission, then full recovery
             in_episode = self.total_steps * 0.35 < t < self.total_steps * 0.65
             osc = -0.8 if in_episode else 0.6
+            base_q = self.base_quality
+            amp = self.quality_amplitude
         elif self.profile == NetworkProfile.OSCILLATORY:
-            osc = np.sin(2 * np.pi * t / self.oscillation_period)
+            # Periodic traffic congestion and natural channel recovery cycles
+            osc = np.sin(2.0 * np.pi * t / self.oscillation_period)
+            base_q = 0.65
+            amp = 0.65
         else:
             osc = 0.0
-        q_base = float(np.clip(self.base_quality + self.quality_amplitude * osc, 0.05, 0.98))
+            base_q = self.base_quality
+            amp = self.quality_amplitude
 
-        # 2) Scenario baseline (per-scenario packet_loss_rate/comm_delay_prob)
-        # contributes a small, BOUNDED downward pressure -- not stacked on
-        # top, folded into the same base term so scenarios remain
-        # differentiable without dominating the oscillation.
+        q_base = float(np.clip(base_q + amp * osc, 0.05, 0.98))
         q_base = float(np.clip(q_base - 0.5 * self.base_loss_rate, 0.05, 0.98))
 
-        # 3) Distance: multiplicative modulator centered around 1.0. Physically,
-        # distance attenuates quality based on inter-agent spread relative to range,
-        # modulating around baseline without pinning peak channel quality.
+        # 2) Distance attenuation (Log-Distance Path Loss)
         dist_deg = self._distance_degradation()
-        if dist_deg is None:
-            q_dist = 1.0
-        else:
-            q_dist = 1.0 - 0.5 * dist_deg
+        q_dist = 1.0 - 0.15 * dist_deg if dist_deg is not None else 1.0
 
-        # 4) Environment: bounded multiplicative factor centered around 1.0.
-        env_mult = environment_factor(self.environment, self.environment_factors)
-        q_env = 1.0 / max(env_mult, 1.0)
+        # 3) Scenario-specific obstacle shadowing dynamics (rubble, steel structures, warehouse racks)
+        q_shad = scenario_shadowing(self.environment, t)
 
-        # 5) Interference: a TEMPORARY multiplicative dip while the window
-        # is active, then self-clears -- matches real intermittent RF
-        # interference (e.g. co-channel equipment cycling on/off) rather
-        # than an additive step that never recovers.
+        # 4) Temporary RF interference events
         q_interf = self.interference_dip_factor if in_any_window(t, self._comm_interference_windows) else 1.0
 
-        # 6) Small-scale (fast) fading: AR(1) mean-reverting process, the
-        # standard discrete-time approximation of Rayleigh/Rician fading
-        # with a finite coherence time. Bounded by construction (reverts
-        # toward 0 each step) -- unlike one-shot additive jitter, it
-        # cannot accumulate a permanent drift in either direction.
-        noise = self.rng.normal(0.0, 1.0)
-        self._fading_state = (
-            self.fading_correlation * self._fading_state
-            + np.sqrt(max(1.0 - self.fading_correlation ** 2, 0.0)) * noise
+        # 5) Small-scale Rician AR(1) fading
+        fading, self._fading_state = rician_fading_step(
+            self._fading_state, self.fading_correlation, self.rng, self.wireless_jitter_scale
         )
-        fading = self.wireless_jitter_scale * self._fading_state
 
-        q = q_base * q_dist * q_env * q_interf + fading
+        q = q_base * q_dist * q_shad * q_interf + fading
         return float(np.clip(q, 0.05, 0.98))
 
     def loss_rate_at(self, t: int) -> float:
@@ -187,10 +172,18 @@ class NetworkConditionGenerator:
  
     def simulate_message(
         self, t: int, payload_bytes: float = 256.0
-     ) -> NetworkState:
+    ) -> NetworkState:
+        from src.env.network_model import burst_loss_active
+
         loss = self.loss_rate_at(t)
         latency = self.latency_at(t)
         bw_avail = self.bandwidth_at(t)
+
+        # Occasional short burst error events
+        if burst_loss_active(self.rng, t, burst_probability=0.02, burst_duration=2):
+            loss = float(np.clip(loss + 0.30, 0.0, 0.95))
+            latency += 0.20
+
         delivered = payload_bytes * bw_avail
         msg_sent = 1
         ack = 0 if self.rng.random() < loss else 1
