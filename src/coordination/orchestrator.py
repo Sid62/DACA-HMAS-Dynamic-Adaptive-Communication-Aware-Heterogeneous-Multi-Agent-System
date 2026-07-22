@@ -206,6 +206,9 @@ class DACAOrchestrator:
 
         for step in range(self.max_steps):
             self.cloud_llm.set_step(step)
+            self.peer_manager.set_step(step)
+            for d_client in self.device_llms.values():
+                d_client.set_step(step)
             fleet = self.env.fleet
             dist_mat = distance_matrix(fleet.agents)
 
@@ -251,6 +254,12 @@ class DACAOrchestrator:
                         f"ThetaDown={self.acds.theta_down:.3f} "
                         f"ThetaUp={self.acds.theta_up:.3f}"
              )
+            if mode != prev_mode:
+                prev_mode_name = "Centralized" if prev_mode == 0 else "Decentralized"
+                mode_name = "Centralized" if mode == 0 else "Decentralized"
+                print(f"\nStep {step}")
+                print(f"{prev_mode_name} -> {mode_name}\n")
+
             if mode != prev_mode and self.config.use_handoff:
                 snap = capture_snapshot(
                     fleet, self.env.subtask_list, coalitions,
@@ -300,6 +309,7 @@ class DACAOrchestrator:
                     assignments, coalitions = self.centralized.plan(self.env, cqi_matrix)
                     print(">>>> USING CENTRALIZED")
                 else:
+                    print("\nEntering decentralized planner\n")
                     assignments, coalitions = self.decentralized.plan(self.env, cqi_matrix)
                     print(">>>> USING DECENTRALIZED")
                 self._planning_latency_total += time.perf_counter() - t_plan

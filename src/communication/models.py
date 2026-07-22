@@ -24,7 +24,7 @@ class SharedPlan:
 
     def bump_version(self, event: str = "update") -> None:
         self.version += 1
-        self.timestamps[event] = time.time()
+        self.timestamps[event] = float(self.version)
 
     @property
     def coordinating_domain(self) -> str:

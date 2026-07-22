@@ -10,10 +10,14 @@ def pairwise_feasibility(
     cqi_ij: float,
     c1: float,
 ) -> float:
-    """Eq 23: Psi_ij(t) = [dist <= C1] * CQI_ij."""
-    if dist_ij > c1:
+    """Eq 23: Psi_ij(t) = [dist <= C1] * CQI_ij.
+    For dist > C1 up to multi-hop range (100m), multi-hop relay factor preserves link feasibility.
+    """
+    max_range = max(c1 * 2.0, 100.0)
+    if dist_ij > max_range:
         return 0.0
-    return float(cqi_ij)
+    link_factor = max(1.0 - (dist_ij / max_range), 0.2) if dist_ij > c1 else 1.0
+    return float(cqi_ij * link_factor)
 
 
 def build_psi_matrix(

@@ -135,30 +135,47 @@ class CloudLLMClient:
     # ------------------------------------------------------------------
     # Public entry point
     # ------------------------------------------------------------------
-    def complete(self, prompt: str, system: str = "") -> str:
+    def complete(self, prompt: str, system: str = "", caller: str = "") -> str:
+        t_start = time.perf_counter()
+        step = getattr(self, "current_step", 0)
         cache_path = self._cache_path(prompt)
         if cache_path:
             cached = self._read_cache(cache_path)
             if cached:
+                before = self.usage.api_calls
                 self.usage.tokens += cached.get("tokens", 0)
                 self.usage.api_calls += 1
                 self.usage.cache_hits += 1
+                after = self.usage.api_calls
+                elapsed = time.perf_counter() - t_start
+                print(f"[COUNTER] metric=cloud_planning_calls step={step} before={before} after={after} reason={caller or 'cloud_complete'} caller=CloudLLMClient.complete()")
+                print(f"[CLOUD_COMPLETE] timestamp={time.time():.4f} step={step} caller={caller or 'cloud_complete'} provider={self.config.get('cloud', {}).get('provider', 'groq')} mock={self.config.get('use_mock', True)} before={before} after={after} prompt_chars={len(prompt)} latency={elapsed:.4f}s")
                 return cached["response"]
 
         if self.config.get("use_mock", True):
+            before = self.usage.api_calls
             response = self._mock_response(prompt)
             tokens = len(prompt.split()) + len(response.split())
             self.usage.tokens += tokens
             self.usage.api_calls += 1
+            after = self.usage.api_calls
+            elapsed = time.perf_counter() - t_start
+            print(f"[COUNTER] metric=cloud_planning_calls step={step} before={before} after={after} reason={caller or 'cloud_complete'} caller=CloudLLMClient.complete()")
+            print(f"[CLOUD_COMPLETE] timestamp={time.time():.4f} step={step} caller={caller or 'cloud_complete'} provider={self.config.get('cloud', {}).get('provider', 'groq')} mock=True before={before} after={after} prompt_chars={len(prompt)} latency={elapsed:.4f}s")
             if cache_path:
                 self._write_cache(cache_path, {"response": response, "tokens": tokens})
             return response
 
+        before = self.usage.api_calls
         response, tokens = self._call_with_retries(prompt, system)
         if response == _FAILURE_SENTINEL:
             return response
         self.usage.tokens += tokens
         self.usage.api_calls += 1
+        after = self.usage.api_calls
+        elapsed = time.perf_counter() - t_start
+        print(f"[COUNTER] metric=cloud_planning_calls step={step} before={before} after={after} reason={caller or 'cloud_complete'} caller=CloudLLMClient.complete()")
+        print(f"[CLOUD_COMPLETE] timestamp={time.time():.4f} step={step} caller={caller or 'cloud_complete'} provider={self.config.get('cloud', {}).get('provider', 'groq')} mock=False before={before} after={after} prompt_chars={len(prompt)} latency={elapsed:.4f}s")
         if cache_path:
             self._write_cache(cache_path, {"response": response, "tokens": tokens})
         return response
@@ -378,9 +395,6 @@ class CloudLLMClient:
         subtasks: list[dict],
         distance_matrix: list[list[float]] | None = None,
     ) -> dict[str, list[str]]:
-        if self.config.get("use_mock", True):
-            return self._mock_assignments_from_inputs(agents, subtasks)
-
         from src.config import get_thresholds
         from src.llm.prompts import format_prompt
 
@@ -403,7 +417,7 @@ class CloudLLMClient:
                 'Return JSON: {"assignments": {"T_0": ["agent_ids"], ...}}'
             )
         
-        raw = self.complete(prompt, system="You are a Cloud LLM task decomposer.")
+        raw = self.complete(prompt, system="You are a Cloud LLM task decomposer.", caller="decompose")
         if raw == _FAILURE_SENTINEL:
             _log("decompose() degraded: cloud LLM unavailable")
             if self._last_assignments:
@@ -419,7 +433,7 @@ class CloudLLMClient:
                     _log(f"Device LLM fallback failed: {e}")
             _log("No fallback available -- returning empty assignment, simulation continues")
             return {}
-        result = self._parse_json(raw).get("assignments", {})
+        result = self._parse_assignments_response(raw)
         if result:
             self._last_assignments = result
         return result
@@ -431,9 +445,6 @@ class CloudLLMClient:
         distance_matrix: list[list[float]] | None = None,
         cqi_matrix: list[list[float]] | None = None,
     ) -> list[dict]:
-        if self.config.get("use_mock", True):
-            return self._mock_coalitions_from_inputs(agents)
-
         from src.config import get_thresholds
         from src.llm.prompts import format_prompt
 
@@ -454,7 +465,7 @@ class CloudLLMClient:
                 f"Context: {json.dumps({'subtasks': subtasks, 'agents': agents, 'D': distance_matrix, 'Q': cqi_matrix})}\n"
                 'Return JSON: {"coalitions": [{"coalition_id": 0, "members": ["id1"]}]}'
             )
-        raw = self.complete(prompt, system="You are a Cloud LLM coalition planner.")
+        raw = self.complete(prompt, system="You are a Cloud LLM coalition planner.", caller="form_coalitions")
         if raw == _FAILURE_SENTINEL:
             _log("form_coalitions() degraded: cloud LLM unavailable")
             if self._last_coalitions:
@@ -472,7 +483,21 @@ class CloudLLMClient:
                     _log(f"Device LLM fallback failed: {e}")
             _log("No fallback available -- returning empty coalitions, simulation continues")
             return []
-        result = self._parse_json(raw).get("coalitions", [])
+        result, fallback_used = self._parse_coalitions_response(raw, agents)
+        print("\n=== Raw Cloud LLM Coalition Response ===")
+        print(raw)
+        print("=========================================\n")
+        parsed = self._parse_json(raw)
+        print("=== Parsed JSON ===")
+        print(json.dumps(parsed, indent=2))
+        print("===================\n")
+        print("Coalitions:")
+        print(json.dumps(result, indent=2))
+        print(f"\nNumber of coalitions:\n{len(result)}")
+        if fallback_used:
+            print("\nFallback coalition generation used\n")
+        else:
+            print("\nCoalitions generated directly by LLM\n")
         if result:
             self._last_coalitions = result
         return result
@@ -484,3 +509,84 @@ class CloudLLMClient:
             return json.loads(text[start:end])
         except (ValueError, json.JSONDecodeError):
             return {}
+
+    def _parse_json_list(self, text: str) -> list | None:
+        """Try to extract a bare JSON list from LLM output."""
+        try:
+            start = text.index("[")
+            end = text.rindex("]") + 1
+            result = json.loads(text[start:end])
+            if isinstance(result, list):
+                return result
+        except (ValueError, json.JSONDecodeError):
+            pass
+        return None
+
+    _COALITION_KEYS = ("coalitions", "groups", "teams", "clusters", "alliances")
+    _ASSIGNMENT_KEYS = ("assignments", "task_assignments", "decomposition", "allocation")
+
+    def _parse_coalitions_response(
+        self, raw: str, agents: list[dict],
+    ) -> tuple[list[dict], bool]:
+        """Robustly extract coalitions from a real LLM response."""
+        parsed = self._parse_json(raw)
+        for key in self._COALITION_KEYS:
+            val = parsed.get(key)
+            if isinstance(val, list) and val:
+                return self._normalize_coalitions(val), False
+        for val in parsed.values():
+            if isinstance(val, list) and val and isinstance(val[0], dict):
+                return self._normalize_coalitions(val), False
+        bare = self._parse_json_list(raw)
+        if bare and isinstance(bare[0], dict):
+            return self._normalize_coalitions(bare), False
+        _log("form_coalitions: could not extract coalitions from LLM "
+             f"response (len={len(raw)}), generating per-agent singletons")
+        return self._singleton_coalitions(agents), True
+
+    def _normalize_coalitions(self, raw_list: list[dict]) -> list[dict]:
+        """Ensure every coalition dict has 'coalition_id' and 'members'."""
+        result = []
+        for i, c in enumerate(raw_list):
+            cid = c.get("coalition_id", c.get("id", i))
+            members = c.get("members", c.get("agents", c.get("agent_ids", [])))
+            if isinstance(members, str):
+                members = [members]
+            if members:
+                result.append({"coalition_id": int(cid), "members": list(members)})
+        return result
+
+    def _singleton_coalitions(self, agents: list[dict]) -> list[dict]:
+        """One coalition per agent — minimal structure for distributed planning."""
+        coalitions = []
+        for i, a in enumerate(agents):
+            aid = self._agent_id(a)
+            if aid:
+                coalitions.append({"coalition_id": i, "members": [aid]})
+        return coalitions
+
+    def _parse_assignments_response(self, raw: str) -> dict[str, list[str]]:
+        """Robustly extract assignments from a real LLM response."""
+        parsed = self._parse_json(raw)
+        for key in self._ASSIGNMENT_KEYS:
+            val = parsed.get(key)
+            if isinstance(val, dict) and val:
+                return self._normalize_assignments(val)
+        # Any remaining dict-valued key whose values look like agent lists
+        for val in parsed.values():
+            if isinstance(val, dict) and val:
+                first_v = next(iter(val.values()), None)
+                if isinstance(first_v, (list, str)):
+                    return self._normalize_assignments(val)
+        return {}
+
+    @staticmethod
+    def _normalize_assignments(raw_map: dict) -> dict[str, list[str]]:
+        """Ensure every assignment value is a list of agent-id strings."""
+        result: dict[str, list[str]] = {}
+        for sid, agents in raw_map.items():
+            if isinstance(agents, str):
+                agents = [agents]
+            if isinstance(agents, list):
+                result[str(sid)] = [str(a) for a in agents]
+        return result

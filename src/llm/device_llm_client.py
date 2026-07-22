@@ -81,23 +81,39 @@ class DeviceLLMClient:
         key = hashlib.sha256(f"{self.node_id}:{prompt}".encode()).hexdigest()[:16]
         return cache_dir / f"device_{key}.json"
 
-    def complete(self, prompt: str) -> str:
+    current_step: int = 0
+
+    def set_step(self, step: int) -> None:
+        self.current_step = step
+
+    def complete(self, prompt: str, caller: str = "device_complete", coalition_id: int = 0) -> str:
+        t_start = time.perf_counter()
+        step = getattr(self, "current_step", 0)
         cache_path = self._cache_path(prompt)
+        cache_hit = False
         if cache_path and cache_path.exists():
             with open(cache_path, encoding="utf-8") as f:
                 data = json.load(f)
+                before = self.usage.api_calls
                 self.usage.tokens += data.get("tokens", 0)
                 self.usage.api_calls += 1
                 self.usage.cache_hits += 1
-                print(f"[COMPLETE] domain={self.node_id} CACHE HIT "
-                      f"prompt_chars={len(prompt)}")
+                after = self.usage.api_calls
+                cache_hit = True
+                elapsed = time.perf_counter() - t_start
+                print(f"[COUNTER] metric=device_planning_calls step={step} before={before} after={after} reason={caller} caller=DeviceLLMClient.complete()")
+                print(f"[DEVICE_COMPLETE] timestamp={time.time():.4f} step={step} caller={caller} domain={self.node_id} coalition_id={coalition_id} cache=HIT latency={elapsed:.4f}s")
                 return data["response"]
 
         if self.config.get("use_mock", True):
+            before = self.usage.api_calls
             response = self._mock_response(prompt)
             tokens = len(prompt.split()) + len(response.split())
             self.usage.memory_mb = 4096.0
+            elapsed = time.perf_counter() - t_start
+            after = before + 1
         else:
+            before = self.usage.api_calls
             provider = self.config.get("device", {}).get("provider", "ollama")
             start = time.perf_counter()
             if provider == "vllm":
@@ -105,13 +121,13 @@ class DeviceLLMClient:
             else:
                 response, tokens = self._ollama_call(prompt)
             elapsed = time.perf_counter() - start
-            print(f"[COMPLETE] domain={self.node_id} provider={provider} "
-                  f"elapsed={elapsed:.2f}s prompt_chars={len(prompt)} "
-                  f"approx_prompt_tokens={len(prompt)//4} response_tokens={tokens}")
             self.usage.memory_mb = self.config.get("device", {}).get("memory_mb", 8192.0)
+            after = before + 1
 
         self.usage.tokens += tokens
         self.usage.api_calls += 1
+        print(f"[COUNTER] metric=device_planning_calls step={step} before={before} after={after} reason={caller} caller=DeviceLLMClient.complete()")
+        print(f"[DEVICE_COMPLETE] timestamp={time.time():.4f} step={step} caller={caller} domain={self.node_id} coalition_id={coalition_id} cache=MISS latency={elapsed:.4f}s")
         if cache_path:
             with open(cache_path, "w", encoding="utf-8") as f:
                 json.dump({"response": response, "tokens": tokens}, f)
@@ -286,6 +302,11 @@ class DeviceLLMClient:
 
         domain_members = [m for m in coalition_members if m in self.managed_agent_ids]
         obs_payload = self._observations_payload(scope=domain_members)
+        subtasks_assigned = coalition_state.get("subtasks", [])
+        print("\nDEVICE LLM CALLED")
+        print(f"- coalition id: {coalition_id}")
+        print(f"- participating agents: {coalition_members}")
+        print(f"- subtask: {subtasks_assigned}\n")
         try:
             prompt = format_prompt(
                 "plan_local",
@@ -326,7 +347,7 @@ class DeviceLLMClient:
         print(f"  Approx tokens            = {len(prompt)//4}")
         print("=" * 70)
 
-        raw = self.complete(prompt)
+        raw = self.complete(prompt, caller="plan_local", coalition_id=coalition_id)
         result = self._parse_json_response(raw)
         if "assignments" in result:
             self.node_state.belief_state["last_plan"] = result
@@ -358,7 +379,7 @@ class DeviceLLMClient:
                 f"Plan: {json.dumps(peer_plan)}\n"
                 'Return JSON: {{"approved": true, "revision": {{}}}}'
             )
-        raw = self.complete(prompt)
+        raw = self.complete(prompt, caller="review_peer_plan", coalition_id=shared_plan_version)
         result = self._parse_json_response(raw)
         self.node_state.neighbor_plans[peer_id] = peer_plan
         return result
@@ -388,7 +409,7 @@ class DeviceLLMClient:
                 f"Leader: {json.dumps(leader_plan)}\n"
                 f"Reviews: {json.dumps(peer_reviews)}"
             )
-        raw = self.complete(prompt)
+        raw = self.complete(prompt, caller="merge_peer_plan", coalition_id=coalition_id)
         result = self._parse_json_response(raw)
         merged = result.get("merged_plan", result)
         if merged:
@@ -421,7 +442,7 @@ class DeviceLLMClient:
                 f"message type {message_type}.\n"
                 f"Payload: {json.dumps(payload)}"
             )
-        raw = self.complete(prompt)
+        raw = self.complete(prompt, caller="respond_to_peer", coalition_id=shared_plan_version)
         return self._parse_json_response(raw)
 
     def ingest_messages(self, messages: list[PeerMessage]) -> None:

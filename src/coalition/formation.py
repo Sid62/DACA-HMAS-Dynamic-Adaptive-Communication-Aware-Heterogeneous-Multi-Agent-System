@@ -66,6 +66,18 @@ class CoalitionFormation:
             coalitions.extend(self._repair_infeasible(infeasible, fleet, psi, id_to_idx))
 
         coalitions = self._merge_singleton_coalitions(coalitions, fleet, psi, id_to_idx)
+
+        # Fallback: if coalition formation produced nothing (e.g. real LLM
+        # returned unparseable output AND all repair attempts yielded empty
+        # results), create one singleton per agent so that downstream
+        # distributed planning always has coalitions to iterate over.
+        if not coalitions:
+            print("\nFallback coalition generation used\n")
+            coalitions = [
+                {"coalition_id": i, "members": [a.agent_id]}
+                for i, a in enumerate(fleet.agents)
+            ]
+
         coalitions = self._stabilize_coalition_ids(coalitions)
 
         for c in coalitions:

@@ -145,6 +145,11 @@ class PeerCommunicationManager:
         cqi = max(self._resolve_link_cqi(sender, receiver), 0.01)
         return self.base_delay_s / cqi
 
+    current_step: int = 0
+
+    def set_step(self, step: int) -> None:
+        self.current_step = step
+
     def send_message(
         self,
         sender: str,
@@ -161,13 +166,18 @@ class PeerCommunicationManager:
         msg = PeerMessage(
             sender=sender,
             receiver=receiver,
-            timestamp=time.time() + self._delivery_delay(sender, receiver),
+            timestamp=float(self.current_step) + self._delivery_delay(sender, receiver),
             message_type=message_type,
             payload=payload,
             ttl=ttl,
         )
         self.inboxes[receiver].append(msg)
+        before = self.peer_messages
         self.peer_messages += 1
+        after = self.peer_messages
+        cid = payload.get("coalition_id", "N/A") if isinstance(payload, dict) else "N/A"
+        print(f"[COUNTER] metric=peer_messages step={self.current_step} before={before} after={after} reason={message_type} caller=PeerCommunicationManager.send_message()")
+        print(f"[PEER_MESSAGE] step={self.current_step} sender={sender} receiver={receiver} coalition_id={cid} type={message_type} before={before} after={after}")
         dlog("peer", "send_message", sender=sender, receiver=receiver, type=message_type)
         return True
 
@@ -180,11 +190,15 @@ class PeerCommunicationManager:
     ) -> int:
         """Broadcast to all registered domain peers except sender."""
         delivered = 0
-        for receiver in self.registered_nodes:
+        for receiver in sorted(self.registered_nodes):
             if receiver != sender:
                 if self.send_message(sender, receiver, message_type, payload, ttl):
                     delivered += 1
+        before = self.broadcast_count
         self.broadcast_count += 1
+        after = self.broadcast_count
+        print(f"[COUNTER] metric=broadcast_count step={self.current_step} before={before} after={after} reason=broadcast_{message_type} caller=PeerCommunicationManager.broadcast()")
+        print(f"[PEER_BROADCAST] step={self.current_step} sender={sender} type={message_type} delivered={delivered} before={before} after={after}")
         dlog("peer", "broadcast", sender=sender, delivered=delivered)
         return delivered
 
@@ -227,14 +241,24 @@ class PeerCommunicationManager:
             self.inboxes[nid].extend(PeerMessage.from_dict(m) for m in msgs)
 
     def record_consensus_round(self, latency_s: float) -> None:
+        before = self.consensus_rounds
         self.consensus_rounds += 1
+        after = self.consensus_rounds
         self.consensus_latency_s += latency_s
+        print(f"[COUNTER] metric=consensus_rounds step={self.current_step} before={before} after={after} reason=consensus_completed caller=PeerCommunicationManager.record_consensus_round()")
+        print(f"[CONSENSUS_COMPLETE] step={self.current_step} round={after} latency={latency_s:.4f}s")
 
     def record_plan_merge(self) -> None:
+        before = self.plan_merge_count
         self.plan_merge_count += 1
+        after = self.plan_merge_count
+        print(f"[COUNTER] metric=plan_merge_count step={self.current_step} before={before} after={after} reason=plan_merged caller=PeerCommunicationManager.record_plan_merge()")
 
     def record_distributed_replanning(self) -> None:
+        before = self.distributed_replanning_count
         self.distributed_replanning_count += 1
+        after = self.distributed_replanning_count
+        print(f"[COUNTER] metric=distributed_replanning_count step={self.current_step} before={before} after={after} reason=distributed_replanning caller=PeerCommunicationManager.record_distributed_replanning()")
 
     def metrics_snapshot(self) -> dict[str, float | int]:
         return {

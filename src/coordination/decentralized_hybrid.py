@@ -236,7 +236,7 @@ class DecentralizedHybridCoordinator:
             if any(a in members for a in agents)
         ]
 
-        # Determine target peer domains: coalition participants + required capability providers
+        # Determine target peer domains: coalition participants + required capability providers + all registered domain peers
         participant_domains = domains_in_coalition(members, env.fleet)
         capability_provider_domains: set[str] = set()
         subtask_map = {s.subtask_id: s for s in env.subtask_list}
@@ -247,7 +247,8 @@ class DecentralizedHybridCoordinator:
                     if any(sk in st.required_skills for sk in agent.skills):
                         capability_provider_domains.add(agent.agent_type.value)
 
-        target_domains = set(participant_domains).union(capability_provider_domains)
+        all_registered_domains = list(self.device_llms.keys()) if self.device_llms else list(discover_agent_type_domains(env.fleet).keys())
+        target_domains = set(participant_domains).union(capability_provider_domains).union(all_registered_domains)
         peer_domains = [
             d for d in sorted(target_domains)
             if d != leader_domain and self._domain_client(d, env.fleet) is not None
@@ -256,6 +257,7 @@ class DecentralizedHybridCoordinator:
         coalition_state = {
             "coalition_id": coalition_id,
             "members": members,
+            "subtasks": coalition_subtasks,
             "leader_domain": leader_domain,
             "domains": domains,
             "peer_domains": peer_domains,

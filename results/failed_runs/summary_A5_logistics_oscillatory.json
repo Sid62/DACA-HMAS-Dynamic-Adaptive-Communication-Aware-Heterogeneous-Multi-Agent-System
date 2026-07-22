@@ -1,0 +1,15 @@
+{
+  "A5_logistics_oscillatory": {
+    "success_mean": 0.5,
+    "success_std": 0.0,
+    "steps_mean": 100.0,
+    "tokens_mean": 147479.0,
+    "api_calls_mean": 110.0,
+    "tfr_mean": 1.0,
+    "cfr_mean": 1.0,
+    "sc_mean": 1.0,
+    "peer_messages_mean": 13.0,
+    "consensus_rounds_mean": 19.0,
+    "n_seeds": 1
+  }
+}
