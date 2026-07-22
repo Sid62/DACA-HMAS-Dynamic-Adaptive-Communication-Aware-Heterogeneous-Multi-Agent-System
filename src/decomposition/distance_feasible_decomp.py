@@ -156,21 +156,53 @@ class DistanceFeasibleDecomposer:
             ):
                 validated[sid] = candidates
             else:
-                best = self._find_feasible_agents(st, fleet)
+                best = self._find_feasible_agents(st, fleet, validated)
                 if best:
                     validated[sid] = best
 
         return validated
 
     def _find_feasible_agents(
-        self, subtask: Subtask, fleet: AgentFleet
+        self,
+        subtask: Subtask,
+        fleet: AgentFleet,
+        current_assignments: dict[str, list[str]] | None = None,
     ) -> list[str]:
-        """Greedy fallback: pick nearest reachable agent."""
+        """Skill-aware and workload-balanced fallback assignment."""
+        workload: dict[str, int] = {}
+        if current_assignments:
+            for aids in current_assignments.values():
+                for aid in aids:
+                    workload[aid] = workload.get(aid, 0) + 1
+
+        # Priority 1: Agents possessing ALL required skills
+        full_skill_candidates = [
+            a for a in fleet.agents if all(s in a.skills for s in subtask.required_skills)
+        ]
+
+        candidates = full_skill_candidates if full_skill_candidates else [
+            a for a in fleet.agents if any(s in a.skills for s in subtask.required_skills)
+        ]
+        if not candidates:
+            candidates = fleet.agents
+
         best_id = None
-        best_dist = float("inf")
-        for agent in fleet.agents:
+        best_cost = float("inf")
+        n_tasks = max(len(current_assignments) if current_assignments else 1, 1)
+
+        # Convex weights: dist=0.50, workload=0.50 (sum = 1.0)
+        w_dist = 0.50
+        w_workload = 0.50
+
+        for agent in candidates:
             d = dist(agent.position, subtask.target)
-            if d <= self.r_reach and d < best_dist:
-                best_dist = d
-                best_id = agent.agent_id
+            if d <= self.r_reach:
+                norm_dist = min(d / self.r_reach, 1.0)
+                norm_workload = min(workload.get(agent.agent_id, 0) / n_tasks, 1.0)
+                # Composite cost C(a, s) in [0, 1]
+                cost = w_dist * norm_dist + w_workload * norm_workload
+                if cost < best_cost:
+                    best_cost = cost
+                    best_id = agent.agent_id
         return [best_id] if best_id else []
+

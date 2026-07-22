@@ -54,15 +54,9 @@ class PostSwitchReallocator:
         distance_matrix: np.ndarray,
         cqi_matrix: np.ndarray,
     ) -> bool:
-        """Eq 31: REALLOC(t*) indicator."""
-        if not mode_changed:
-            return False
-        if self.coalition_formation is None:
-            return False
-        cfr = self.coalition_formation.compute_cfr(
-            coalitions, fleet, distance_matrix, cqi_matrix
-        )
-        return cfr < 1.0
+        """Eq 31: REALLOC(t*) indicator -- trigger local reallocation whenever architecture switches."""
+        return mode_changed
+
 
     def _select_leader_domain(self, members: list[str], fleet: AgentFleet) -> str:
         return dominant_domain_for_coalition(members, fleet)
@@ -151,6 +145,12 @@ class PostSwitchReallocator:
             new_members = coalition.get("members", [])
             if proposal and isinstance(proposal, list) and proposal[0].get("members"):
                 new_members = proposal[0]["members"]
+            elif proposal and isinstance(proposal, dict) and proposal.get("members"):
+                new_members = proposal["members"]
+            elif proposal and isinstance(proposal, dict) and proposal.get("coalitions"):
+                c_list = proposal.get("coalitions", [])
+                if c_list and isinstance(c_list, list) and c_list[0].get("members"):
+                    new_members = c_list[0]["members"]
             return {
                 "coalition_id": coalition.get("coalition_id"),
                 "members": new_members,
@@ -197,8 +197,88 @@ class PostSwitchReallocator:
             cqi_matrix.tolist(),
             scope_to_managed=False,
         )
+        if not new_coalitions:
+            new_coalitions = self._algorithmic_reallocate(
+                subtasks, fleet, coalitions, distance_matrix, cqi_matrix
+            )
         if not new_coalitions and self.coalition_formation:
             new_coalitions = self.coalition_formation.form(
                 fleet, subtasks, distance_matrix, cqi_matrix
             )
         return new_coalitions or coalitions
+
+    def _algorithmic_reallocate(
+        self,
+        subtasks: list[Subtask],
+        fleet: AgentFleet,
+        coalitions: list[dict],
+        distance_matrix: np.ndarray,
+        cqi_matrix: np.ndarray,
+    ) -> list[dict]:
+        """Multi-factor utility-based algorithmic reallocation solver for remaining subtasks."""
+        remaining_tasks = [s for s in subtasks if not s.completed]
+        if not remaining_tasks:
+            return coalitions
+
+        id_to_idx = {a.agent_id: i for i, a in enumerate(fleet.agents)}
+        workload: dict[str, int] = {}
+        for c in coalitions:
+            for m in c.get("members", []):
+                workload[m] = workload.get(m, 0)
+
+        updated_coalitions = [dict(c) for c in coalitions]
+        if not updated_coalitions:
+            updated_coalitions = [
+                {"coalition_id": i, "members": [a.agent_id]}
+                for i, a in enumerate(fleet.agents)
+            ]
+
+        for st in remaining_tasks:
+            candidates = [
+                a for a in fleet.agents if all(s in a.skills for s in st.required_skills)
+            ]
+            if not candidates:
+                candidates = [
+                    a for a in fleet.agents if any(s in a.skills for s in st.required_skills)
+                ]
+            if not candidates:
+                candidates = fleet.agents
+
+            best_agent = None
+            best_utility = float("inf")
+            n_tasks = max(len(subtasks), 1)
+            r_max = 100.0
+
+            # Convex weights: dist=0.40, workload=0.40, battery=0.10, cqi=0.10 (sum = 1.0)
+            w_d, w_w, w_b, w_c = 0.40, 0.40, 0.10, 0.10
+
+            for agent in candidates:
+                d = dist(agent.position, st.target)
+                idx = id_to_idx.get(agent.agent_id, 0)
+                mean_cqi = float(np.mean(cqi_matrix[idx, :])) if cqi_matrix.size > 0 else 1.0
+
+                norm_d = min(d / r_max, 1.0)
+                norm_w = min(workload.get(agent.agent_id, 0) / n_tasks, 1.0)
+                norm_b = min(agent.battery / 100.0, 1.0)
+                norm_c = min(mean_cqi, 1.0)
+
+                # Composite cost score C(a, s) in [0, 1]
+                score = w_d * norm_d + w_w * norm_w - w_b * norm_b - w_c * norm_c
+                if score < best_utility:
+                    best_utility = score
+                    best_agent = agent
+
+            if best_agent:
+                aid = best_agent.agent_id
+                workload[aid] = workload.get(aid, 0) + 1
+                # Ensure agent belongs to an active coalition
+                found = False
+                for c in updated_coalitions:
+                    if aid in c.get("members", []):
+                        found = True
+                        break
+                if not found:
+                    updated_coalitions[0]["members"].append(aid)
+
+        return updated_coalitions
+

@@ -179,15 +179,13 @@ def should_replan(
         members = plan_state.coalition_members.get(coalition_id)
         if not required or not members:
             continue
-        covered: set[str] = set()
-        for member_id in members:
-            covered |= agent_skills.get(member_id, set())
-        if not required.issubset(covered):
-            return True, f"coalition_skill_regressed:{subtask_id}"
+        current_skills: set[str] = set()
+        for mid in members:
+            current_skills.update(agent_skills.get(mid, set()))
+        if not required.issubset(current_skills):
+            return True, f"subtask_skills_no_longer_satisfied:{subtask_id}"
 
-    
-
-    # --- Trigger 6: Coalition membership changed underneath the plan ------
+    # --- Trigger 7: Coalition membership changed underneath the plan ------
     # If coalitions passed into this call (freshly computed by the caller,
     # independent of whether a replan is happening) no longer match what
     # the last accepted plan reasoned over, the stored plan's coalition
