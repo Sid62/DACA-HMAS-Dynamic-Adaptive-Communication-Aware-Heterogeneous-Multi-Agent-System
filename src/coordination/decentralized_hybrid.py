@@ -235,14 +235,34 @@ class DecentralizedHybridCoordinator:
             for sid, agents in assignments_map.items()
             if any(a in members for a in agents)
         ]
+
+        # Determine target peer domains: coalition participants + required capability providers
+        participant_domains = domains_in_coalition(members, env.fleet)
+        capability_provider_domains: set[str] = set()
+        subtask_map = {s.subtask_id: s for s in env.subtask_list}
+        for sid in coalition_subtasks:
+            st = subtask_map.get(sid)
+            if st:
+                for agent in env.fleet.agents:
+                    if any(sk in st.required_skills for sk in agent.skills):
+                        capability_provider_domains.add(agent.agent_type.value)
+
+        target_domains = set(participant_domains).union(capability_provider_domains)
+        peer_domains = [
+            d for d in sorted(target_domains)
+            if d != leader_domain and self._domain_client(d, env.fleet) is not None
+        ]
+
         coalition_state = {
             "coalition_id": coalition_id,
             "members": members,
             "leader_domain": leader_domain,
             "domains": domains,
+            "peer_domains": peer_domains,
         }
 
-        self._update_domain_states(env, members, domains, shared.version)
+        all_coalition_domains = list(set(domains).union(peer_domains))
+        self._update_domain_states(env, members, all_coalition_domains, shared.version)
 
         drained = pm.receive_messages(leader_domain)
         leader_msgs = [
@@ -255,7 +275,7 @@ class DecentralizedHybridCoordinator:
         leader_client.ingest_messages(leader_msgs)
 
         print(f"[COALITION-PLAN] coalition_id={coalition_id} leader={leader_domain} "
-              f"members={members} num_members={len(members)}")
+              f"members={members} num_members={len(members)} peer_domains={peer_domains}")
 
         t_plan_start = time.perf_counter()
         leader_plan = leader_client.plan_local(
@@ -280,9 +300,7 @@ class DecentralizedHybridCoordinator:
         
 
         peer_reviews: list[dict[str, Any]] = []
-        for peer_domain in domains:
-            if peer_domain == leader_domain:
-                continue
+        for peer_domain in peer_domains:
             peer_client = self._domain_client(peer_domain, env.fleet)
             if peer_client is None:
                 continue
@@ -338,7 +356,6 @@ class DecentralizedHybridCoordinator:
         shared.bump_version("consensus")
         self.shared_plans[coalition_id] = shared
 
-        peer_domains = [d for d in domains if d != leader_domain]
         if peer_domains:
             pm.multicast(
                 leader_domain,
@@ -347,7 +364,7 @@ class DecentralizedHybridCoordinator:
                 {"coalition_id": coalition_id, "shared_plan": shared.to_dict()},
             )
 
-        for domain in domains:
+        for domain in all_coalition_domains:
             client = self._domain_client(domain, env.fleet)
             if client:
                 client.node_state.shared_plan_version = shared.version

@@ -119,7 +119,14 @@ class PeerCommunicationManager:
         ):
             si = self.domain_id_to_idx[sender]
             ri = self.domain_id_to_idx[receiver]
-            return float(self.domain_cqi_matrix[si, ri])
+            val = float(self.domain_cqi_matrix[si, ri])
+            if val > 0.0:
+                return val
+            if self.cqi_matrix is not None and self.cqi_matrix.size > 0:
+                pos = self.cqi_matrix[self.cqi_matrix > 0]
+                if len(pos) > 0:
+                    return float(np.mean(pos)) * 0.5
+                return 0.1
         if self.cqi_matrix is not None:
             si = self.agent_id_to_idx.get(sender)
             ri = self.agent_id_to_idx.get(receiver)

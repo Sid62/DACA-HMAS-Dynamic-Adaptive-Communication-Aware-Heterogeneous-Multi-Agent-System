@@ -130,24 +130,18 @@ class NetworkConditionGenerator:
         # differentiable without dominating the oscillation.
         q_base = float(np.clip(q_base - 0.5 * self.base_loss_rate, 0.05, 0.98))
 
-        # 3) Distance: multiplicative modulator with a floor. Physically,
-        # real MANETs rely on multi-hop relaying -- distance attenuates
-        # SNR/throughput, it does not fully sever the link the way an
-        # unbounded additive penalty implies. The floor keeps a dispersed
-        # fleet from permanently pinning quality to its worst value.
+        # 3) Distance: multiplicative modulator centered around 1.0. Physically,
+        # distance attenuates quality based on inter-agent spread relative to range,
+        # modulating around baseline without pinning peak channel quality.
         dist_deg = self._distance_degradation()
         if dist_deg is None:
             q_dist = 1.0
         else:
-            q_dist = self.distance_quality_floor + (1.0 - self.distance_quality_floor) * (1.0 - dist_deg)
+            q_dist = 1.0 - 0.5 * dist_deg
 
-        # 4) Environment: bounded multiplicative attenuation (inverse of
-        # the existing badness factor -- warehouse=1.0 -> no attenuation,
-        # disaster=1.35 -> ~0.74x quality), same physical meaning as
-        # before, just applied as a bounded multiplier instead of an
-        # additive term that could compound past 1.0.
+        # 4) Environment: bounded multiplicative factor centered around 1.0.
         env_mult = environment_factor(self.environment, self.environment_factors)
-        q_env = float(np.clip(1.0 / max(env_mult, 1e-6), 0.5, 1.0))
+        q_env = 1.0 / max(env_mult, 1.0)
 
         # 5) Interference: a TEMPORARY multiplicative dip while the window
         # is active, then self-clears -- matches real intermittent RF

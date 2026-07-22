@@ -1,0 +1,14 @@
+{
+  "experiment_status": "DEGRADED",
+  "failure_reason": "UnexpectedError(OpenAIError)",
+  "provider": "groq",
+  "model": "llama-3.3-70b-versatile",
+  "scenario": "logistics",
+  "architecture": "A5",
+  "network_profile": "stable",
+  "seed": 1,
+  "simulation_step": 99,
+  "retry_count": 3,
+  "exception_type": "OpenAIError",
+  "timestamp": "2026-07-22T14:40:06Z"
+}

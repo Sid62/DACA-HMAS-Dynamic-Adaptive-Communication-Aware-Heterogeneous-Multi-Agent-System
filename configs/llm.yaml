@@ -17,17 +17,25 @@ cloud:
   max_tokens: 1024
   timeout: 420
 
+#device:
+#  provider: ollama          # ollama | vllm
+#  model: llama3:latest
+#  base_url: http://localhost:11434
+#  max_tokens: 200
+#  temperature: 0.1
+#  num_gpu: -1               # -1 = use all GPU layers (Ollama)
+#  memory_mb: 8192           # reported in metrics Table III
+
 device:
-  provider: ollama          # ollama | vllm
-  model: llama3:latest
-  base_url: http://localhost:11434
+  provider: vllm
+  model: Qwen/Qwen2.5-3B-Instruct
+  base_url: http://localhost:8000/v1
   max_tokens: 200
   temperature: 0.1
-  num_gpu: -1               # -1 = use all GPU layers (Ollama)
-  memory_mb: 8192           # reported in metrics Table III
+  memory_mb: 8192 
 
 # Set false to use real Cloud API + local GPU Device LLM
-use_mock: false
+use_mock: true
 
 cache_responses: true
 cache_dir: .llm_cache
