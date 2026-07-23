@@ -44,7 +44,7 @@ device:
   memory_mb: 8192 
 
 # Set false to use real Cloud API + local GPU Device LLM
-use_mock: true
+use_mock: false
 
 cache_responses: true
 cache_dir: .llm_cache
