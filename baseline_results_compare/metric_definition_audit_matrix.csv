@@ -1,0 +1,7 @@
+Metric,AutoHMA-LLM Definition,DACA-HMAS Implementation,Directly Comparable?,Recommended Treatment
+Success Rate (%),Task Completion Rate (% subtasks finished within step limit),success_rate (len(completed_subtasks) / total * 100),YES,"Compare 1:1 directly in text, tables, and figures."
+Steps,Communication / coordination steps required for task decomposition,"steps (physical simulation timesteps / Gym movement ticks, capped at 200)",NO,Do not force step-to-step equivalency. Report physical ticks separately and isolate cloud_planning_calls / replanning_count for coordination rounds.
+API Calls,Invocations of central LLM planner across architecture,api_calls (cloud_planning_calls + device_planning_calls),NOT DIRECTLY,"Isolate cloud_planning_calls for central decomposition comparison, and report total (cloud+device) API calls explicitly."
+Tokens,Prompt + completion tokens exchanged during planning,tokens (cloud_tokens + device_tokens),COMPARABLE,Compare total tokens directly while highlighting edge offloading reduction in central cloud token load.
+Memory (MB),Measured dynamic runtime memory consumption of classical control tier (40-55 MB),"memory_mb (Google Colab allocated runtime ceiling ~12,288 MB / 12 GB)",NOT COMPARABLE,Architecturally different. Footnote as environment allocation limit rather than dynamic algorithmic RAM consumption.
+Computation Time (s),End-to-end wall-clock execution time (seconds),computation_s (perf_counter elapsed execution time),YES,Compare 1:1 directly as total system latency.

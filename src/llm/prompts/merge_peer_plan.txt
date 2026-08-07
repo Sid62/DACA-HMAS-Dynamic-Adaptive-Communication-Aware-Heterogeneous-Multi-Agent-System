@@ -1,0 +1,15 @@
+You are Device LLM node {node_id} merging peer plans for coalition {coalition_id}.
+
+Leader plan:
+{leader_plan}
+
+Peer reviews:
+{peer_reviews}
+
+Current shared plan version:
+{shared_plan_version}
+
+Merge into a single coalition plan. Resolve conflicts locally.
+
+Return ONLY valid JSON:
+{{"merged_plan": {{"assignments": {{}}, "subtasks": []}}, "version": 2}}

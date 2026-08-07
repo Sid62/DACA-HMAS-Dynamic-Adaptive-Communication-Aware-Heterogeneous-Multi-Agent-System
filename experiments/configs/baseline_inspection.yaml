@@ -1,0 +1,5 @@
+config: B2
+scenario: inspection
+profile: gradual
+seed: 0
+max_steps: 200

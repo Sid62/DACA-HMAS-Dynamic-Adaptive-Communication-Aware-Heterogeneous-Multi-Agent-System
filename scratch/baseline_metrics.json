@@ -1,0 +1,288 @@
+{
+  "results": {
+    "logistics": {
+      "config": "B1",
+      "scenario": "logistics",
+      "profile": "stable",
+      "seed": 42,
+      "success_rate": 0.0,
+      "steps": 50,
+      "tokens": 814,
+      "api_calls": 5,
+      "memory_mb": 138.2,
+      "computation_s": 0.835,
+      "total_wall_clock_s": 0.836,
+      "tfr": 1.0,
+      "cfr": 1.0,
+      "switch_count": 0,
+      "peer_messages": 0,
+      "broadcast_count": 0,
+      "consensus_rounds": 0,
+      "consensus_latency": 0.0,
+      "plan_merge_count": 0,
+      "distributed_replanning_count": 0,
+      "cloud_planning_calls": 2,
+      "device_planning_calls": 3,
+      "replanning_count": 1,
+      "local_reallocation_count": 0,
+      "cached_plan_reuse_count": 0,
+      "merged_singleton_count": 0,
+      "avg_planning_latency": 0.0319,
+      "coalition_change_count": 1,
+      "communication_steps": 2,
+      "communication_step_breakdown": {
+        "global_planning": 1,
+        "dispatch": 1,
+        "local_coordination": 0,
+        "peer_consensus": 0,
+        "feedback_sync": 0,
+        "handoff_reallocation": 0
+      },
+      "hallucination_stats": {
+        "total_events": 0,
+        "partial_strips": 0,
+        "full_strips": 0,
+        "retry_attempts": 0,
+        "retry_successes": 0,
+        "substitutions": 0,
+        "singleton_fallbacks": 0,
+        "events_log": [],
+        "form_coalitions_success_count": 1
+      },
+      "experience_reuse_attempts": 6,
+      "experience_reuse_hits": 0
+    },
+    "inspection": {
+      "config": "B1",
+      "scenario": "inspection",
+      "profile": "stable",
+      "seed": 42,
+      "success_rate": 12.5,
+      "steps": 50,
+      "tokens": 15657,
+      "api_calls": 85,
+      "memory_mb": 139.2,
+      "computation_s": 2.124,
+      "total_wall_clock_s": 2.14,
+      "tfr": 1.0,
+      "cfr": 1.0,
+      "switch_count": 0,
+      "peer_messages": 0,
+      "broadcast_count": 0,
+      "consensus_rounds": 0,
+      "consensus_latency": 0.0,
+      "plan_merge_count": 0,
+      "distributed_replanning_count": 0,
+      "cloud_planning_calls": 34,
+      "device_planning_calls": 51,
+      "replanning_count": 17,
+      "local_reallocation_count": 0,
+      "cached_plan_reuse_count": 0,
+      "merged_singleton_count": 0,
+      "avg_planning_latency": 0.0264,
+      "coalition_change_count": 1,
+      "communication_steps": 34,
+      "communication_step_breakdown": {
+        "global_planning": 17,
+        "dispatch": 17,
+        "local_coordination": 0,
+        "peer_consensus": 0,
+        "feedback_sync": 0,
+        "handoff_reallocation": 0
+      },
+      "hallucination_stats": {
+        "total_events": 0,
+        "partial_strips": 0,
+        "full_strips": 0,
+        "retry_attempts": 0,
+        "retry_successes": 0,
+        "substitutions": 0,
+        "singleton_fallbacks": 0,
+        "events_log": [],
+        "form_coalitions_success_count": 17
+      },
+      "experience_reuse_attempts": 120,
+      "experience_reuse_hits": 8
+    },
+    "search_rescue": {
+      "config": "B1",
+      "scenario": "search_rescue",
+      "profile": "stable",
+      "seed": 42,
+      "success_rate": 0.0,
+      "steps": 50,
+      "tokens": 1066,
+      "api_calls": 5,
+      "memory_mb": 139.5,
+      "computation_s": 3.195,
+      "total_wall_clock_s": 3.197,
+      "tfr": 1.0,
+      "cfr": 1.0,
+      "switch_count": 0,
+      "peer_messages": 0,
+      "broadcast_count": 0,
+      "consensus_rounds": 0,
+      "consensus_latency": 0.0,
+      "plan_merge_count": 0,
+      "distributed_replanning_count": 0,
+      "cloud_planning_calls": 2,
+      "device_planning_calls": 3,
+      "replanning_count": 1,
+      "local_reallocation_count": 0,
+      "cached_plan_reuse_count": 0,
+      "merged_singleton_count": 0,
+      "avg_planning_latency": 0.0302,
+      "coalition_change_count": 1,
+      "communication_steps": 2,
+      "communication_step_breakdown": {
+        "global_planning": 1,
+        "dispatch": 1,
+        "local_coordination": 0,
+        "peer_consensus": 0,
+        "feedback_sync": 0,
+        "handoff_reallocation": 0
+      },
+      "hallucination_stats": {
+        "total_events": 0,
+        "partial_strips": 0,
+        "full_strips": 0,
+        "retry_attempts": 0,
+        "retry_successes": 0,
+        "substitutions": 0,
+        "singleton_fallbacks": 0,
+        "events_log": [],
+        "form_coalitions_success_count": 1
+      },
+      "experience_reuse_attempts": 10,
+      "experience_reuse_hits": 0
+    }
+  },
+  "targets": {
+    "logistics": [
+      [
+        "T_0",
+        121.97674477019815,
+        146.7514526490353
+      ],
+      [
+        "T_1",
+        105.67783759866573,
+        158.3673328810692
+      ],
+      [
+        "T_2",
+        23.457009788255583,
+        158.66775478391725
+      ],
+      [
+        "T_3",
+        85.7051269421104,
+        176.21610902227377
+      ],
+      [
+        "T_4",
+        43.58158058351197,
+        47.9496252239567
+      ],
+      [
+        "T_5",
+        22.508409546660477,
+        94.87555514289112
+      ]
+    ],
+    "inspection": [
+      [
+        "T_0",
+        43.426047031473956,
+        24.32018983488522
+      ],
+      [
+        "T_1",
+        21.96661061895357,
+        81.91230168783551
+      ],
+      [
+        "T_2",
+        73.89783043055476,
+        107.47856688406665
+      ],
+      [
+        "T_3",
+        72.38576007919384,
+        124.69543109853434
+      ],
+      [
+        "T_4",
+        170.89451416090904,
+        150.1547063715377
+      ],
+      [
+        "T_5",
+        174.6491849584883,
+        100.1386746992292
+      ],
+      [
+        "T_6",
+        152.71387524094413,
+        84.70189323270878
+      ],
+      [
+        "T_7",
+        124.93123821794931,
+        120.35012910863047
+      ]
+    ],
+    "search_rescue": [
+      [
+        "T_0",
+        83.71815037535731,
+        81.93291247858983
+      ],
+      [
+        "T_1",
+        161.41746989908992,
+        22.576426996457926
+      ],
+      [
+        "T_2",
+        32.721826814393836,
+        94.15350294485967
+      ],
+      [
+        "T_3",
+        43.90175921150991,
+        172.83684620565387
+      ],
+      [
+        "T_4",
+        76.22066030839696,
+        58.95204574029991
+      ],
+      [
+        "T_5",
+        31.43254273231559,
+        85.31834165479337
+      ],
+      [
+        "T_6",
+        61.407353210379924,
+        136.39945685106196
+      ],
+      [
+        "T_7",
+        143.43069884265228,
+        105.4654566523144
+      ],
+      [
+        "T_8",
+        84.80073360624363,
+        117.66662224227163
+      ],
+      [
+        "T_9",
+        77.68199877373326,
+        142.3442414425599
+      ]
+    ]
+  }
+}

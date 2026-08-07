@@ -1,0 +1,5 @@
+config: A5
+scenario: inspection
+profile: gradual
+seeds: 10
+max_steps: 200
