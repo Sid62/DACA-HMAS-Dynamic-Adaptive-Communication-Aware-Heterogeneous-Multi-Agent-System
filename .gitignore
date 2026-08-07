@@ -17,6 +17,11 @@ results/
 # Experiment outputs
 experiments/results/
 *.log
+logs/
+scratch/
+experience_store.json
+files*/
+files*.zip
 
 # IDE
 .idea/

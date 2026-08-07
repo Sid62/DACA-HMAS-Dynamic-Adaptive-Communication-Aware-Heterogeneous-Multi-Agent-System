@@ -82,7 +82,6 @@ def _build_device_llms_by_type(
 
 
 from src.coordination.plan_continuity import PlanContinuityEngine
-from src.coordination.plan_repair import PlanRepairer
 from src.handoff.delta_transfer import DeltaStateTransferManager
 
 
@@ -142,14 +141,12 @@ class DACAOrchestrator:
                 r_reach=self.thresholds.get("R_reach", 100.0),
                 c_task=self.thresholds.get("C_task", 30.0),
             )
-            self.plan_repairer = PlanRepairer(r_reach=self.thresholds.get("R_reach", 100.0))
             self.delta_transfer_manager = DeltaStateTransferManager()
         else:
             self.cloud_llm.config["cache_responses"] = False
             for d_client in self.device_llms.values():
                 d_client.config["cache_responses"] = False
             self.continuity_engine = None
-            self.plan_repairer = None
             self.delta_transfer_manager = None
 
 
@@ -168,7 +165,6 @@ class DACAOrchestrator:
             use_distance_decomp=self.config.use_distance_decomp,
             use_coalition_feasibility=self.config.use_coalition_feasibility,
             continuity_engine=self.continuity_engine,
-            plan_repairer=self.plan_repairer,
             experience_store=self.experience_store,
         )
         self.decentralized = DecentralizedHybridCoordinator(
@@ -180,7 +176,6 @@ class DACAOrchestrator:
             use_distance_decomp=self.config.use_distance_decomp,
             use_coalition_feasibility=self.config.use_coalition_feasibility,
             continuity_engine=self.continuity_engine,
-            plan_repairer=self.plan_repairer,
             experience_store=self.experience_store,
         )
         self.ca_transfer = CATransferManager(
@@ -470,9 +465,8 @@ class DACAOrchestrator:
                            f"Agent={agent.agent_id} "
                            f"Distance={dist(agent.position, subtask.target):.2f}"
                        )
-                    v_agent = getattr(agent, "speed", 3.0)
-                    effective_radius = 8.0 + max(0.0, float(avg_latency)) * v_agent * 2.0
-                    if dist(agent.position, subtask.target) < effective_radius:
+                    from src.coordination.constants import COMPLETION_RADIUS_M
+                    if dist(agent.position, subtask.target) < COMPLETION_RADIUS_M:
                         was_completed = subtask.completed
                         self.env.mark_subtask_complete(sid)
                         if not was_completed and hasattr(self, "experience_store") and self.experience_store is not None and self.experience_store.enabled:
@@ -586,6 +580,10 @@ class DACAOrchestrator:
             cloud_network_calls=self.cloud_llm.usage.cloud_network_calls,
             cloud_disk_cache_hits=self.cloud_llm.usage.cloud_disk_cache_hits,
             cloud_failed_attempts=self.cloud_llm.usage.cloud_failed_attempts,
+            semantic_cache_hits=getattr(
+                getattr(self.cloud_llm, "semantic_cache", None), "cache_hits", 0
+            ),
+            cloud_call_attribution=self.cloud_llm.usage.call_attribution(),
             process_peak_rss_mb=peak_rss,
             process_mean_rss_mb=mean_rss,
             gpu_peak_memory_mb=gpu_peak,

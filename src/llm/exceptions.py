@@ -54,7 +54,10 @@ class FailureReport:
     def persist(self) -> Path:
         """Write to results/failed_runs/ so invalid runs are discoverable
         and excludable at analysis time without re-running experiments."""
-        out_dir = project_root() / "results" / "failed_runs"
+        try:
+            out_dir = project_root() / "results" / "failed_runs"
+        except Exception:
+            out_dir = Path.cwd() / "results" / "failed_runs"
         out_dir.mkdir(parents=True, exist_ok=True)
         fname = (
             f"FAILED_{self.scenario}_{self.architecture}_{self.network_profile}"

@@ -25,10 +25,11 @@ class PlanValidityScore:
     coalition_feasibility_score: float = 1.0
     resource_network_score: float = 1.0
     total_validity_score: float = 1.0
+    validity_threshold: float = 0.75
 
     @property
     def is_valid(self) -> bool:
-        return self.total_validity_score >= 0.75
+        return self.total_validity_score >= self.validity_threshold
 
 
 @dataclass
@@ -101,12 +102,16 @@ class PlanContinuityEngine:
     ) -> PlanValidityScore:
         """Compute quantitative Plan Validity Score (V_plan)."""
         if self.active_context is None or not self.active_context.assignments:
-            return PlanValidityScore(total_validity_score=0.0)
+            return PlanValidityScore(
+                total_validity_score=0.0, validity_threshold=self.validity_threshold
+            )
 
         ctx = self.active_context
         incomplete_subtasks = [s for s in subtasks if not s.completed]
         if not incomplete_subtasks:
-            return PlanValidityScore(total_validity_score=1.0)
+            return PlanValidityScore(
+                total_validity_score=1.0, validity_threshold=self.validity_threshold
+            )
 
         # 1. Task Completion Alignment
         valid_assignments = 0
@@ -183,6 +188,7 @@ class PlanContinuityEngine:
             coalition_feasibility_score=s_coalition,
             resource_network_score=s_res,
             total_validity_score=v_plan,
+            validity_threshold=self.validity_threshold,
         )
 
     def apply_target_commitment_lock(

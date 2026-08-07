@@ -4,7 +4,7 @@ cloud:
   api_key_env: NVIDIA_API_KEY
   base_url: https://integrate.api.nvidia.com/v1
   model: meta/llama-3.1-8b-instruct
-  temperature: 0.2
+  temperature: 0.0
   max_tokens: 1024
   timeout: 420
 
@@ -13,7 +13,7 @@ cloud:
 #  api_key_env: GROQ_API_KEY
 #  base_url: https://api.groq.com/openai/v1
 #  model: llama-3.3-70b-versatile
-#  temperature: 0.2
+#  temperature: 0.0
 #  max_tokens: 1024
 #  timeout: 420
 
@@ -43,10 +43,11 @@ device:
   temperature: 0.1
   memory_mb: 8192 
 
-# Set false to use real Cloud API + local GPU Device LLM
-use_mock: true
+# Set false to use real Cloud API + local GPU Device LLM (Production profile)
+# Set true for offline deterministic mock testing (e.g. pytest / mock benchmarking)
+use_mock: false
 
-cache_responses: false
+cache_responses: true
 cache_dir: .llm_cache
 
 experience_reuse:

@@ -20,13 +20,14 @@ packet_loss_window: 20 # W_B sliding window size
 # ACDS hysteresis thresholds (Eqs 20-21)
 acds:
   cqi_crossover: 0.65
-  delta: 0.04        # hysteresis band half-width
   delta: 0.04         # hysteresis band half-width
   persistence_window: 4  # N consecutive intervals
+  min_dwell_steps: 5     # Minimum steps an architecture must be held before another switch
 
 # Coalition feasibility (Eqs 24-25)
 gamma_min: 0.3
 # Hierarchical planning policy thresholds
+plan_validity_threshold: 0.75         # Minimum V_plan score for plan continuity reuse
 planning_similarity_threshold: 0.85   # cosine-like overlap needed to reuse a cached cloud plan
 maximum_cached_plan_age: 15           # steps; force refresh even if similar
 minimum_replanning_interval: 3        # steps; suppress re-triggering within this window (except architecture switch)
@@ -46,14 +47,9 @@ optimizations:
     enabled: true
     similarity_threshold: 0.90
     max_cache_age: 15
-  confidence_gate:
-    enabled: true
-    threshold: 0.85
   local_reasoning:
     enabled: true
     min_state_change: 0.05
-  early_exit:
-    enabled: true
   consensus:
     skip_when_stable: true
     stable_cqi_threshold: 0.65

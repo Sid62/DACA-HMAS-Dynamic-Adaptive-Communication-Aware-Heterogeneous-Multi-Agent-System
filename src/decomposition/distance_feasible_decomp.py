@@ -206,8 +206,15 @@ class DistanceFeasibleDecomposer:
             (self._agent_speed(a, fleet) for a in fleet.agents), default=1.0
         ) or 1.0
 
-        def _best_in_reach(cands: list) -> str | None:
-            """Lowest-cost agent in `cands` that lies within r_reach, or None."""
+        def _best_in_reach(cands: list, use_eta: bool = False) -> str | None:
+            """Lowest-cost agent in `cands` that lies within r_reach, or None.
+
+            `use_eta` selects travel-time ranking. It is enabled ONLY for
+            fallback tiers, i.e. for subtasks the previous implementation would
+            have dropped. The primary (full-skill) tier keeps the original
+            distance ranking so that every assignment the old solver already
+            produced is reproduced bit-for-bit.
+            """
             best_id = None
             best_cost = float("inf")
             for agent in cands:
@@ -225,10 +232,13 @@ class DistanceFeasibleDecomposer:
                     # Normalized so that an agent travelling at the fleet's top
                     # speed across the full r_reach scores 1.0, keeping the term
                     # in [0, 1] and scenario-independent.
-                    v_a = self._agent_speed(agent, fleet)
-                    eta = d / v_a if v_a > 0 else float("inf")
-                    eta_ref = self.r_reach / v_ref if v_ref > 0 else 1.0
-                    norm_dist = min(eta / eta_ref, 1.0) if eta_ref > 0 else 1.0
+                    if use_eta:
+                        v_a = self._agent_speed(agent, fleet)
+                        eta = d / v_a if v_a > 0 else float("inf")
+                        eta_ref = self.r_reach / v_ref if v_ref > 0 else 1.0
+                        norm_dist = min(eta / eta_ref, 1.0) if eta_ref > 0 else 1.0
+                    else:
+                        norm_dist = min(d / self.r_reach, 1.0)
                     norm_workload = min(
                         workload.get(agent.agent_id, 0) / n_tasks, 1.0
                     )
@@ -268,10 +278,19 @@ class DistanceFeasibleDecomposer:
         # contains a reachable agent. Skill priority is unchanged whenever the
         # preferred tier is reachable, so this is strictly a widening of the
         # fallback, not a change of preference.
-        for tier in (full_skill_candidates, any_skill_candidates, list(fleet.agents)):
+        tiers = (full_skill_candidates, any_skill_candidates, list(fleet.agents))
+        # Index of the tier the PREVIOUS implementation would have committed to:
+        # full-skill if non-empty, else any-skill if non-empty, else whole fleet.
+        legacy_idx = 0 if full_skill_candidates else (1 if any_skill_candidates else 2)
+        for idx, tier in enumerate(tiers):
             if not tier:
                 continue
-            chosen = _best_in_reach(tier)
+            # Travel-time ranking applies ONLY in tiers the previous solver would
+            # never have reached. In the legacy tier the original distance
+            # ranking is preserved exactly, so every assignment the old solver
+            # already produced is reproduced bit-for-bit and this change can only
+            # add assignments, never move them.
+            chosen = _best_in_reach(tier, use_eta=(idx > legacy_idx))
             if chosen:
                 return [chosen]
 

@@ -58,6 +58,8 @@ class ExperimentMetrics:
     cloud_network_calls: int = 0
     cloud_disk_cache_hits: int = 0
     cloud_failed_attempts: int = 0
+    semantic_cache_hits: int = 0
+    cloud_call_attribution: dict = field(default_factory=dict)
 
     # Upgraded memory instrumentation
     process_peak_rss_mb: float = 0.0
@@ -126,8 +128,9 @@ class ExperimentMetrics:
     planner_latency: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
-        tot_cache = self.cache_hits + self.cache_misses
-        hit_rate = round(self.cache_hits / tot_cache, 4) if tot_cache > 0 else self.cache_hit_rate
+        sem_hits = self.semantic_cache_hits
+        tot_cache = sem_hits + self.cache_misses
+        hit_rate = round(sem_hits / tot_cache, 4) if tot_cache > 0 else self.cache_hit_rate
         return {
             "config": self.config_name,
             "scenario": self.scenario,
@@ -157,6 +160,9 @@ class ExperimentMetrics:
             "cloud_network_calls": self.cloud_network_calls,
             "cloud_disk_cache_hits": self.cloud_disk_cache_hits,
             "cloud_failed_attempts": self.cloud_failed_attempts,
+            "semantic_cache_hits": self.semantic_cache_hits,
+            "disk_cache_hits": self.cache_hits,
+            "cloud_call_attribution": dict(self.cloud_call_attribution),
             "memory_mb": round(self.device_memory_mb, 1),
             "device_llm_python_heap_delta_mb": round(self.device_llm_python_heap_delta_mb, 4),
             "device_llm_python_heap_delta_by_device": dict(self.device_llm_python_heap_delta_by_device),
@@ -287,6 +293,8 @@ class MetricsCollector:
         cloud_network_calls: int = 0,
         cloud_disk_cache_hits: int = 0,
         cloud_failed_attempts: int = 0,
+        semantic_cache_hits: int = 0,
+        cloud_call_attribution: dict | None = None,
         process_peak_rss_mb: float = 0.0,
         process_mean_rss_mb: float = 0.0,
         gpu_peak_memory_mb: float = 0.0,
@@ -397,6 +405,8 @@ class MetricsCollector:
             cloud_network_calls=cloud_network_calls,
             cloud_disk_cache_hits=cloud_disk_cache_hits,
             cloud_failed_attempts=cloud_failed_attempts,
+            semantic_cache_hits=semantic_cache_hits,
+            cloud_call_attribution=dict(cloud_call_attribution or {}),
             process_peak_rss_mb=process_peak_rss_mb if process_peak_rss_mb > 0.0 else device_memory_mb,
             process_mean_rss_mb=process_mean_rss_mb,
             gpu_peak_memory_mb=gpu_peak_memory_mb,

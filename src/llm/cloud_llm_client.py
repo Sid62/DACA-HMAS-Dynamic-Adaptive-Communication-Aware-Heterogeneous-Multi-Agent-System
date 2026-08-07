@@ -88,6 +88,19 @@ class LLMUsage:
         self.plan_continuity_reuse = 0
         self.device_local_reallocation = 0
 
+    def call_attribution(self) -> dict[str, int]:
+        """Cloud call counts broken down by triggering cause (reporting only)."""
+        return {
+            "initial_planning_calls": self.initial_planning_calls,
+            "completion_replan_calls": self.completion_replan_calls,
+            "cqi_replan_calls": self.cqi_replan_calls,
+            "packet_loss_replan_calls": self.packet_loss_replan_calls,
+            "latency_replan_calls": self.latency_replan_calls,
+            "switch_replan_calls": self.switch_replan_calls,
+            "coalition_retry_calls": self.coalition_retry_calls,
+            "hallucination_retry_calls": self.hallucination_retry_calls,
+        }
+
     def record_call_category(self, caller: str, reason: str | None = None) -> None:
         """Map caller/reason tag to exact mutually exclusive Phase 2 category counter."""
         effective_reason = reason or caller or "initial_planning"

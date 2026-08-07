@@ -191,6 +191,7 @@ class CentralizedHybridCoordinator:
             agent = env.fleet.get_agent(agent_list[0])
             subtask = next((s for s in env.subtask_list if s.subtask_id == sid), None)
             if subtask:
+                from src.coordination.constants import COMPLETION_RADIUS_M
                 from src.env.agents import dist
-                if dist(agent.position, subtask.target) < 5.0:
+                if dist(agent.position, subtask.target) < COMPLETION_RADIUS_M:
                     env.mark_subtask_complete(sid)

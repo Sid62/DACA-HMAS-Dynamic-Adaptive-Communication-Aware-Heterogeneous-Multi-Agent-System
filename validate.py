@@ -7,7 +7,9 @@ K=['success_rate','cloud_planning_calls','cloud_network_calls','cloud_total_toke
 out={}
 for sc in ['logistics','inspection','search_rescue']:
     for seed in [1,2,3,4,5]:
-        if os.path.exists('experience_store.json'): os.remove('experience_store.json')
+        if os.path.exists('experience_store.json'):
+            try: os.remove('experience_store.json')
+            except Exception: pass
         o=DACAOrchestrator(scenario=sc,network_profile='oscillatory',seed=seed,
                            config=CONFIGS['A5'],max_steps=200)
         with contextlib.redirect_stdout(io.StringIO()): m=o.run()
