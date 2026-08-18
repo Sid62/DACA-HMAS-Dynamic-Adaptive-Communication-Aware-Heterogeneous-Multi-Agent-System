@@ -1,0 +1,5 @@
+scenario: logistics
+architecture: centralized
+profile: stable
+seed: 0
+max_steps: 200

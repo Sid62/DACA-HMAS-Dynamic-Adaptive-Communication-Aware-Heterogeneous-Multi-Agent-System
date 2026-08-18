@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+results/
+
+# LLM cache and secrets
+.llm_cache/
+.env
+*.env.local
+
+# Experiment outputs
+experiments/results/
+*.log
+logs/
+scratch/
+experience_store.json
+files*/
+files*.zip
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/

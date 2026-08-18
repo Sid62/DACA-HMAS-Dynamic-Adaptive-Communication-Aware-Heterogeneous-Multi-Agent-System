@@ -1,0 +1,64 @@
+
+cloud:
+  provider: nvidia
+  api_key_env: NVIDIA_API_KEY
+  base_url: https://integrate.api.nvidia.com/v1
+  model: meta/llama-3.1-8b-instruct
+  temperature: 0.0
+  max_tokens: 1024
+  timeout: 420
+
+#cloud:
+#  provider: groq
+#  api_key_env: GROQ_API_KEY
+#  base_url: https://api.groq.com/openai/v1
+#  model: llama-3.3-70b-versatile
+#  temperature: 0.0
+#  max_tokens: 1024
+#  timeout: 420
+
+#device:
+#  provider: vllm
+#  model: Qwen/Qwen2.5-3B-Instruct
+#  base_url: http://localhost:8000/v1
+#  max_tokens: 200
+#  temperature: 0.1
+#  memory_mb: 8192           # reported in metrics Table III
+
+
+#device:
+#  provider: ollama          # ollama | vllm
+#  model: llama3:latest
+#  base_url: http://localhost:11434
+#  max_tokens: 200
+#  temperature: 0.1
+#  num_gpu: -1               # -1 = use all GPU layers (Ollama)
+#  memory_mb: 8192           # reported in metrics Table III
+
+device:
+  provider: vllm
+  model: Qwen/Qwen2.5-3B-Instruct
+  base_url: http://localhost:8000/v1
+  max_tokens: 200
+  temperature: 0.1
+  memory_mb: 8192 
+
+
+# Set false to use real Cloud API + local GPU Device LLM
+use_mock: false
+
+cache_responses: true
+cache_dir: .llm_cache
+
+experience_reuse:
+  enabled: true
+  store_path: experience_store.json
+
+# --- GPU production profile (uncomment and set use_mock: false) ---
+# device:
+#   provider: vllm
+#   model: meta-llama/Llama-3.1-8B-Instruct
+#   base_url: http://localhost:8000/v1
+#   max_tokens: 512
+#   temperature: 0.1
+#   memory_mb: 16384

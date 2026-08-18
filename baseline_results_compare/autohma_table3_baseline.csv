@@ -1,0 +1,4 @@
+Scenario,Success (%),Steps,API Calls,Tokens,Memory (MB),Computation (s)
+Logistics,85.73,5.11,4.23,152.87,50.0,8.5
+Inspection,85.67,3.84,4.85,97.1,40.0,7.8
+Search & Rescue,82.03,4.3,3.41,166.69,55.0,9.2

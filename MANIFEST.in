@@ -1,0 +1,3 @@
+include README.md
+recursive-include src/llm/prompts *.txt
+recursive-include configs *.yaml
