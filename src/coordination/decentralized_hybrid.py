@@ -447,9 +447,13 @@ class DecentralizedHybridCoordinator:
                     candidates, key=lambda aid: dist(fleet.get_agent(aid).position, target)
                 )
                 if new_agent != current_agent:
-                    assignments_map[sid] = [new_agent]
-                    self.local_reallocation_count += 1
-                    print(f"[LOCAL-REALLOC] {sid}: {current_agent} -> {new_agent} ({reason})")
+                    cand_team = [new_agent if a == current_agent else a for a in agent_list]
+                    st = next((s for s in env.subtask_list if s.subtask_id == sid), None)
+                    from src.decomposition.distance_feasible_decomp import validate_assignment_skills
+                    if st is None or validate_assignment_skills(cand_team, st, fleet):
+                        assignments_map[sid] = cand_team
+                        self.local_reallocation_count += 1
+                        print(f"[LOCAL-REALLOC] {sid}: {current_agent} -> {new_agent} ({reason})")
 
     def _try_experience_reuse(
         self,

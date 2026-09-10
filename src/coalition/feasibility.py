@@ -71,5 +71,10 @@ def validate_coalition_members(
     psi_matrix: np.ndarray,
     gamma_min: float,
 ) -> bool:
-    indices = [agent_id_to_idx[mid] for mid in member_ids if mid in agent_id_to_idx]
+    if not member_ids:
+        return False
+    if any(mid not in agent_id_to_idx for mid in member_ids):
+        return False
+    indices = [agent_id_to_idx[mid] for mid in member_ids]
     return coalition_feasibility_score(indices, psi_matrix) >= gamma_min
+

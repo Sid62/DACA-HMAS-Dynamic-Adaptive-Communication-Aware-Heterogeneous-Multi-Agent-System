@@ -93,6 +93,7 @@ class CentralizedHybridCoordinator:
         scenario = getattr(env, "scenario_name", "logistics")
         agent_types = [a.agent_type.value for a in fleet.agents]
 
+        reused_agents: set[str] = set()
         for st in subtasks:
             if st.completed:
                 continue
@@ -110,8 +111,13 @@ class CentralizedHybridCoordinator:
                     candidate_agents = [candidate_agents]
                 valid_ids = {a.agent_id for a in fleet.agents}
                 filtered_candidates = [aid for aid in candidate_agents if aid in valid_ids]
-                if filtered_candidates and validate_joint_assignment(filtered_candidates, st, fleet, c_task, r_reach):
+                if (
+                    filtered_candidates
+                    and not any(aid in reused_agents for aid in filtered_candidates)
+                    and validate_joint_assignment(filtered_candidates, st, fleet, c_task, r_reach)
+                ):
                     reused[st.subtask_id] = filtered_candidates
+                    reused_agents.update(filtered_candidates)
                     self.experience_store.reuse_hits += 1
                     print(f"[EXPERIENCE-REUSE] Reused plan for subtask {st.subtask_id}: {filtered_candidates}")
 
@@ -198,24 +204,23 @@ class CentralizedHybridCoordinator:
     def execute_step(
         self,
         env: DACAEnv,
-        assignments: dict[str, str],
+        assignments: dict[str, list[str]],
     ) -> None:
         targets = {
             s.subtask_id: s.target for s in env.subtask_list
         }
         agent_assignments = {}
         for sid, agents in assignments.items():
-            if agents:
-                agent_assignments[agents[0]] = sid
+            for aid in agents:
+                agent_assignments[aid] = sid
         self.nmpc.step(env.fleet, agent_assignments, targets)
 
         for sid, agent_list in assignments.items():
             if not agent_list:
                 continue
-            agent = env.fleet.get_agent(agent_list[0])
             subtask = next((s for s in env.subtask_list if s.subtask_id == sid), None)
             if subtask:
                 from src.coordination.constants import COMPLETION_RADIUS_M
-                from src.env.agents import dist
-                if dist(agent.position, subtask.target) < COMPLETION_RADIUS_M:
+                from src.decomposition.distance_feasible_decomp import validate_task_completion
+                if validate_task_completion(agent_list, subtask, env.fleet, COMPLETION_RADIUS_M):
                     env.mark_subtask_complete(sid)

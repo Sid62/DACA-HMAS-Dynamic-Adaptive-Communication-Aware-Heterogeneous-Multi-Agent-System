@@ -20,7 +20,7 @@ from src.communication.models import (
 )
 from src.communication.peer_manager import PeerCommunicationManager
 from src.decomposition.distance_feasible_decomp import validate_joint_assignment
-from src.env.agents import AgentFleet
+from src.env.agents import AgentFleet, AgentState, dist
 from src.env.scenarios import Subtask
 from src.llm.device_llm_client import DeviceLLMClient
 
@@ -349,51 +349,55 @@ class PostSwitchReallocator:
             ]
 
         for st in remaining_tasks:
-            candidates = [
-                a for a in fleet.agents if all(s in a.skills for s in st.required_skills)
-            ]
-            if not candidates:
-                candidates = [
-                    a for a in fleet.agents if any(s in a.skills for s in st.required_skills)
-                ]
-            if not candidates:
-                candidates = fleet.agents
-
-            best_agent = None
+            req = set(st.required_skills)
+            full_cands = [a for a in fleet.agents if req.issubset(set(a.skills))]
+            best_team = None
             best_utility = float("inf")
             n_tasks = max(len(subtasks), 1)
             r_max = 100.0
-
-            # Convex weights: dist=0.40, workload=0.40, battery=0.10, cqi=0.10 (sum = 1.0)
             w_d, w_w, w_b, w_c = 0.40, 0.40, 0.10, 0.10
 
-            for agent in candidates:
+            def _agent_score(agent: AgentState) -> float:
+                v = float(getattr(fleet.kinematics.get(agent.agent_type.value, None), "max_speed", 1.0)) if hasattr(fleet, "kinematics") and fleet.kinematics else 1.0
                 d = dist(agent.position, st.target)
+                eta = d / max(v, 1e-9)
                 idx = id_to_idx.get(agent.agent_id, 0)
                 mean_cqi = float(np.mean(cqi_matrix[idx, :])) if cqi_matrix.size > 0 else 1.0
-
-                norm_d = min(d / r_max, 1.0)
+                norm_d = min(eta / (r_max / 15.0), 1.0)
                 norm_w = min(workload.get(agent.agent_id, 0) / n_tasks, 1.0)
                 norm_b = min(agent.battery / 100.0, 1.0)
                 norm_c = min(mean_cqi, 1.0)
+                return w_d * norm_d + w_w * norm_w - w_b * norm_b - w_c * norm_c
 
-                # Composite cost score C(a, s) in [0, 1]
-                score = w_d * norm_d + w_w * norm_w - w_b * norm_b - w_c * norm_c
-                if score < best_utility:
-                    best_utility = score
-                    best_agent = agent
+            # 1. Single agent covering all skills
+            if full_cands:
+                for agent in full_cands:
+                    score = _agent_score(agent)
+                    if score < best_utility or (score == best_utility and best_team is not None and [agent.agent_id] < best_team):
+                        best_utility = score
+                        best_team = [agent.agent_id]
 
-            if best_agent:
-                aid = best_agent.agent_id
-                workload[aid] = workload.get(aid, 0) + 1
-                # Ensure agent belongs to an active coalition
-                found = False
-                for c in updated_coalitions:
-                    if aid in c.get("members", []):
-                        found = True
-                        break
-                if not found:
-                    updated_coalitions[0]["members"].append(aid)
+            # 2. Complementary pair covering all skills if no single agent found
+            if not best_team:
+                for i in range(len(fleet.agents)):
+                    for j in range(i + 1, len(fleet.agents)):
+                        a1, a2 = fleet.agents[i], fleet.agents[j]
+                        if req.issubset(set(a1.skills) | set(a2.skills)):
+                            s1 = _agent_score(a1)
+                            s2 = _agent_score(a2)
+                            score = max(s1, s2)
+                            pair_ids = sorted([a1.agent_id, a2.agent_id])
+                            if score < best_utility or (score == best_utility and best_team is not None and pair_ids < best_team):
+                                best_utility = score
+                                best_team = pair_ids
+
+            if best_team:
+                for aid in best_team:
+                    workload[aid] = workload.get(aid, 0) + 1
+                    found = any(aid in c.get("members", []) for c in updated_coalitions)
+                    if not found and updated_coalitions:
+                        updated_coalitions[0]["members"].append(aid)
 
         return updated_coalitions
+
 

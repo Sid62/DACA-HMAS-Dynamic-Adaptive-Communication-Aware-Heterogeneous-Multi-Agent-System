@@ -12,8 +12,10 @@ def test_end_to_end_determinism_same_seed(tmp_path):
         config=CONFIGS["A5"],
         max_steps=50,
     )
+    orch1.cloud_llm.config["use_mock"] = True
     orch1.cloud_llm.config["cache_dir"] = str(tmp_path / "c1")
     for dc in orch1.device_llms.values():
+        dc.config["use_mock"] = True
         dc.config["cache_dir"] = str(tmp_path / "c1")
     metrics1 = orch1.run().to_dict()
 
@@ -24,8 +26,10 @@ def test_end_to_end_determinism_same_seed(tmp_path):
         config=CONFIGS["A5"],
         max_steps=50,
     )
+    orch2.cloud_llm.config["use_mock"] = True
     orch2.cloud_llm.config["cache_dir"] = str(tmp_path / "c2")
     for dc in orch2.device_llms.values():
+        dc.config["use_mock"] = True
         dc.config["cache_dir"] = str(tmp_path / "c2")
     metrics2 = orch2.run().to_dict()
 

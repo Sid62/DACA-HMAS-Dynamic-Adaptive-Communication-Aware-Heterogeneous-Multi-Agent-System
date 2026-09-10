@@ -228,10 +228,17 @@ class DeviceLLMClient:
             before = self.usage.device_api_calls
             provider = self.config.get("device", {}).get("provider", "ollama")
             start = time.perf_counter()
-            if provider == "vllm":
-                response, p_tok, c_tok, t_tok = self._vllm_call(prompt)
-            else:
-                response, p_tok, c_tok, t_tok = self._ollama_call(prompt)
+            try:
+                if provider == "vllm":
+                    response, p_tok, c_tok, t_tok = self._vllm_call(prompt)
+                else:
+                    response, p_tok, c_tok, t_tok = self._ollama_call(prompt)
+            except Exception as e:
+                print(f"[DEVICE LLM] {provider} call failed ({e}) -- degrading to mock response")
+                response = self._mock_response(prompt)
+                p_tok = len(prompt.split())
+                c_tok = len(response.split())
+                t_tok = p_tok + c_tok
             elapsed = time.perf_counter() - start
             self.usage.prompt_tokens += p_tok
             self.usage.completion_tokens += c_tok

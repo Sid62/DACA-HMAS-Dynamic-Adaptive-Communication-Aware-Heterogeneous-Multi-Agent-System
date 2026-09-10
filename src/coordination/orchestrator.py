@@ -517,8 +517,8 @@ class DACAOrchestrator:
             targets = {s.subtask_id: s.target for s in self.env.subtask_list}
             agent_assignments = {}
             for sid, agents in assignments.items():
-                if agents:
-                    agent_assignments[agents[0]] = sid
+                for aid in agents:
+                    agent_assignments[aid] = sid
 
             t_sim_body = time.perf_counter()
             self.ca_transfer.step(self.env.fleet, mode, agent_assignments, targets)
@@ -526,30 +526,24 @@ class DACAOrchestrator:
             for sid, agent_list in assignments.items():
                 if not agent_list:
                     continue
-                agent = fleet.get_agent(agent_list[0])
                 subtask = next(
                     (s for s in self.env.subtask_list if s.subtask_id == sid), None
                 )
                 if subtask:
-                    if step % 50 == 0:
-                       print(
-                           f"[DIST] Step={step} "
-                           f"Task={sid} "
-                           f"Agent={agent.agent_id} "
-                           f"Distance={dist(agent.position, subtask.target):.2f}"
-                       )
+                    from src.decomposition.distance_feasible_decomp import validate_task_completion
                     from src.coordination.constants import COMPLETION_RADIUS_M
-                    if dist(agent.position, subtask.target) < COMPLETION_RADIUS_M:
+                    if validate_task_completion(agent_list, subtask, fleet, COMPLETION_RADIUS_M):
                         was_completed = subtask.completed
                         self.env.mark_subtask_complete(sid)
                         if not was_completed and hasattr(self, "experience_store") and self.experience_store is not None and self.experience_store.enabled:
                             from src.memory.experience_store import compute_signature
                             agent_types = [a.agent_type.value for a in fleet.agents]
-                            d_lead = dist(agent.position, subtask.target)
+                            first_agent = fleet.get_agent(agent_list[0])
+                            d_lead = dist(first_agent.position, subtask.target)
                             sig = compute_signature(self.scenario, subtask.required_skills, agent_types, d_lead)
                             self.experience_store.record(
                                 signature=sig,
-                                plan={sid: assignments.get(sid, [agent.agent_id])},
+                                plan={sid: list(agent_list)},
                                 success=True,
                                 scenario=self.scenario,
                                 skills=subtask.required_skills,

@@ -14,6 +14,9 @@ for sc in ['logistics','inspection','search_rescue']:
             except Exception: pass
         o=DACAOrchestrator(scenario=sc,network_profile='oscillatory',seed=seed,
                            config=CONFIGS['A5'],max_steps=200)
+        o.cloud_llm.config['use_mock'] = True
+        for dc in o.device_llms.values():
+            dc.config['use_mock'] = True
         with contextlib.redirect_stdout(io.StringIO()): m=o.run()
         d=m.to_dict(); out[f'{sc}_s{seed}']={k:d.get(k) for k in K}
         print(f"{sc[:9]:9s} s{seed} succ={d['success_rate']:6.2f} cloud={d['cloud_planning_calls']:3d}",flush=True)

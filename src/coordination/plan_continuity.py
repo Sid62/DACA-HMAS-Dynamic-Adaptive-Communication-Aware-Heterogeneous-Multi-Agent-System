@@ -207,19 +207,18 @@ class PlanContinuityEngine:
         locked_assignments = {sid: list(agents) for sid, agents in new_assignments.items()}
         locked_agent_ids: set[str] = set()
 
+        from src.decomposition.distance_feasible_decomp import validate_assignment_skills
+
         for st in subtasks:
             if st.completed:
                 continue
             sid = st.subtask_id
             prev_agents = previous_assignments.get(sid, [])
-            if prev_agents:
-                aid = prev_agents[0]
-                if aid in agent_map:
-                    agent = agent_map[aid]
-                    if dist(agent.position, st.target) < lock_threshold:
-                        # Lock agent to this subtask
-                        locked_assignments[sid] = [aid]
-                        locked_agent_ids.add(aid)
+            if prev_agents and validate_assignment_skills(prev_agents, st, fleet):
+                # If any assigned agent is committed within lock threshold, lock the assigned team
+                if any(aid in agent_map and dist(agent_map[aid].position, st.target) < lock_threshold for aid in prev_agents):
+                    locked_assignments[sid] = [aid for aid in prev_agents if aid in agent_map]
+                    locked_agent_ids.update(locked_assignments[sid])
 
         # Clear duplicate assignments for locked agents in other subtasks
         for sid, agents in locked_assignments.items():
@@ -247,7 +246,9 @@ class PlanContinuityEngine:
         if not incomplete_subtasks:
             return {}
 
-        # 1. Filter assignments to incomplete subtasks only
+        from src.decomposition.distance_feasible_decomp import validate_assignment_skills
+
+        # 1. Filter assignments to incomplete subtasks only, validating required skills
         updated_assignments: dict[str, list[str]] = {}
         assigned_agents: set[str] = set()
 
@@ -255,7 +256,11 @@ class PlanContinuityEngine:
         for s in incomplete_subtasks:
             sid = s.subtask_id
             curr_agents = [aid for aid in ctx.assignments.get(sid, []) if aid in agent_map]
-            if curr_agents:
+            if (
+                curr_agents
+                and validate_assignment_skills(curr_agents, s, fleet)
+                and not any(aid in assigned_agents for aid in curr_agents)
+            ):
                 updated_assignments[sid] = curr_agents
                 assigned_agents.update(curr_agents)
             else:
@@ -271,18 +276,45 @@ class PlanContinuityEngine:
                 if not agents:
                     st = next((s for s in incomplete_subtasks if s.subtask_id == sid), None)
                     if st:
-                        eligible = [
+                        req_skills = set(st.required_skills)
+                        # Option A: Single agent covering all required skills
+                        eligible_singles = [
                             aid for aid in freed_agents
-                            if set(st.required_skills).issubset(set(agent_map[aid].skills)) or not st.required_skills
+                            if req_skills.issubset(set(agent_map[aid].skills))
                         ]
-                        if not eligible:
-                            eligible = list(freed_agents)
-                        if eligible:
+                        if eligible_singles:
                             best_agent = min(
-                                eligible, key=lambda aid: dist(agent_map[aid].position, st.target)
+                                eligible_singles,
+                                key=lambda aid: (
+                                    dist(agent_map[aid].position, st.target) / max(getattr(fleet.kinematics.get(agent_map[aid].agent_type.value, None), "max_speed", 1.0), 1e-9)
+                                    if hasattr(fleet, "kinematics") and fleet.kinematics and agent_map[aid].agent_type.value in fleet.kinematics
+                                    else dist(agent_map[aid].position, st.target),
+                                    aid,
+                                ),
                             )
                             updated_assignments[sid] = [best_agent]
                             freed_agents.remove(best_agent)
+                            continue
+
+                        # Option B: Complementary pair from freed agents covering all required skills
+                        freed_list = sorted(list(freed_agents))
+                        best_pair = None
+                        best_pair_cost = float("inf")
+                        for i in range(len(freed_list)):
+                            for j in range(i + 1, len(freed_list)):
+                                aid1, aid2 = freed_list[i], freed_list[j]
+                                if req_skills.issubset(set(agent_map[aid1].skills) | set(agent_map[aid2].skills)):
+                                    d1 = dist(agent_map[aid1].position, st.target)
+                                    d2 = dist(agent_map[aid2].position, st.target)
+                                    cost = d1 + d2
+                                    if cost < best_pair_cost:
+                                        best_pair_cost = cost
+                                        best_pair = [aid1, aid2]
+                        if best_pair:
+                            updated_assignments[sid] = best_pair
+                            freed_agents.remove(best_pair[0])
+                            freed_agents.remove(best_pair[1])
+                            continue
 
         # 4. Apply Target Commitment Locking
         updated_assignments = self.apply_target_commitment_lock(
