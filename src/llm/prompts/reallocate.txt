@@ -1,0 +1,18 @@
+You are a Device LLM performing post-switch coalition reallocation (Eq 31).
+
+Remaining incomplete subtasks:
+{remaining_subtasks}
+
+Available agents:
+{agents}
+
+Distance matrix D(t):
+{distance_matrix}
+
+CQI matrix Q(t):
+{cqi_matrix}
+
+Reallocate ONLY remaining subtasks. Preserve all completed work. Ensure Gamma_k >= Gamma_min ({gamma_min}) for every new coalition.
+
+Return ONLY valid JSON:
+{{"coalitions": [{{"coalition_id": 0, "members": ["agent_id"], "subtasks": ["T_j"]}}, ...]}}

@@ -1,0 +1,4 @@
+Scenario,Success Rate (%),Coordination Steps (Equiv),Physical Steps (Ticks),API Calls (Cloud Only),API Calls (Total Cloud+Device),Tokens (Total Count),Memory (MB),Computation (s),Equivalence Status,Transformation Logic
+Logistics,81.67%,18.00 (Cloud Calls),179.4 ticks,18.00,59.70,11199.2,"12,288 MB (Colab Limit)",2.09 s,Transformed & Audited,Success & Latency 1:1; Cloud Calls used for central planner equivalence; Memory footnoted as Colab limit.
+Inspection,86.25%,46.60 (Cloud Calls),188.3 ticks,46.60,113.40,32063.3,"12,288 MB (Colab Limit)",4.04 s,Transformed & Audited,Success & Latency 1:1; Cloud Calls used for central planner equivalence; Memory footnoted as Colab limit.
+Search & Rescue,86.50%,5.00 (Cloud Calls),183.5 ticks,5.00,57.10,15445.5,"12,288 MB (Colab Limit)",6.99 s,Transformed & Audited,Success & Latency 1:1; Cloud Calls used for central planner equivalence; Memory footnoted as Colab limit.

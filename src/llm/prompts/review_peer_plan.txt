@@ -1,0 +1,15 @@
+You are Device LLM node {node_id} reviewing a peer plan from {peer_id}.
+
+Peer plan to review:
+{peer_plan}
+
+Your local observation:
+{local_observation}
+
+Shared plan version:
+{shared_plan_version}
+
+Evaluate feasibility from your local perspective. Return approval or revision.
+
+Return ONLY valid JSON:
+{{"approved": true, "revision": {{}}, "comments": "..."}}
