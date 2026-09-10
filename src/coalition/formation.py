@@ -180,10 +180,12 @@ class CoalitionFormation:
         repaired = []
         for c in infeasible:
             members = c.get("members", [])
-            indices = [id_to_idx[m] for m in members if m in id_to_idx]
-            if coalition_feasibility_score(indices, psi) >= self.gamma_min:
-                repaired.append(c)
-                continue
+            has_unknown = any(m not in id_to_idx for m in members)
+            if not has_unknown and members:
+                indices = [id_to_idx[m] for m in members]
+                if coalition_feasibility_score(indices, psi) >= self.gamma_min:
+                    repaired.append(c)
+                    continue
             for m in members:
                 if m in id_to_idx:
                     repaired.append({"coalition_id": len(repaired), "members": [m]})

@@ -478,6 +478,7 @@ class DecentralizedHybridCoordinator:
         scenario = getattr(env, "scenario_name", "logistics")
         agent_types = [a.agent_type.value for a in fleet.agents]
 
+        reused_agents: set[str] = set()
         for st in subtasks:
             if st.completed:
                 continue
@@ -494,11 +495,16 @@ class DecentralizedHybridCoordinator:
                 if isinstance(candidate_agents, str):
                     candidate_agents = [candidate_agents]
                 valid_ids = {a.agent_id for a in fleet.agents}
-                filtered_candidates = [aid for aid in candidate_agents if aid in valid_ids]
-                if filtered_candidates and validate_joint_assignment(filtered_candidates, st, fleet, c_task, r_reach):
-                    reused[st.subtask_id] = filtered_candidates
+                if (
+                    candidate_agents
+                    and all(aid in valid_ids for aid in candidate_agents)
+                    and not any(aid in reused_agents for aid in candidate_agents)
+                    and validate_joint_assignment(candidate_agents, st, fleet, c_task, r_reach)
+                ):
+                    reused[st.subtask_id] = candidate_agents
+                    reused_agents.update(candidate_agents)
                     self.experience_store.reuse_hits += 1
-                    print(f"[EXPERIENCE-REUSE] Reused plan for subtask {st.subtask_id}: {filtered_candidates}")
+                    print(f"[EXPERIENCE-REUSE] Reused plan for subtask {st.subtask_id}: {candidate_agents}")
 
         return reused
 
@@ -597,15 +603,16 @@ class DecentralizedHybridCoordinator:
         targets = {s.subtask_id: s.target for s in env.subtask_list}
         agent_assignments = {}
         for sid, agents in assignments.items():
-            if agents:
-                agent_assignments[agents[0]] = sid
+            for aid in agents:
+                agent_assignments[aid] = sid
         self.q_learning.step(env.fleet, agent_assignments, targets)
 
         for sid, agent_list in assignments.items():
             if not agent_list:
                 continue
-            agent = env.fleet.get_agent(agent_list[0])
             subtask = next((s for s in env.subtask_list if s.subtask_id == sid), None)
-            from src.coordination.constants import COMPLETION_RADIUS_M
-            if subtask and dist(agent.position, subtask.target) < COMPLETION_RADIUS_M:
-                env.mark_subtask_complete(sid)
+            if subtask:
+                from src.coordination.constants import COMPLETION_RADIUS_M
+                from src.decomposition.distance_feasible_decomp import validate_task_completion
+                if validate_task_completion(agent_list, subtask, env.fleet, COMPLETION_RADIUS_M):
+                    env.mark_subtask_complete(sid)

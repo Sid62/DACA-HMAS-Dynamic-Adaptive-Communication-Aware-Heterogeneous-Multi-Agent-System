@@ -221,13 +221,15 @@ class PlanContinuityEngine:
                     locked_agent_ids.update(locked_assignments[sid])
 
         # Clear duplicate assignments for locked agents in other subtasks
-        for sid, agents in locked_assignments.items():
+        for sid, agents in list(locked_assignments.items()):
             st = next((s for s in subtasks if s.subtask_id == sid), None)
             if st and st.completed:
                 continue
             curr_agents = [aid for aid in agents if aid not in locked_agent_ids or aid in previous_assignments.get(sid, [])]
-            if curr_agents:
+            if st and curr_agents and validate_assignment_skills(curr_agents, st, fleet):
                 locked_assignments[sid] = curr_agents
+            else:
+                locked_assignments[sid] = []
 
         return locked_assignments
 
@@ -255,7 +257,11 @@ class PlanContinuityEngine:
         agent_map = {a.agent_id: a for a in fleet.agents}
         for s in incomplete_subtasks:
             sid = s.subtask_id
-            curr_agents = [aid for aid in ctx.assignments.get(sid, []) if aid in agent_map]
+            raw_agents = ctx.assignments.get(sid, [])
+            if not raw_agents or any(aid not in agent_map for aid in raw_agents):
+                updated_assignments[sid] = []
+                continue
+            curr_agents = list(raw_agents)
             if (
                 curr_agents
                 and validate_assignment_skills(curr_agents, s, fleet)

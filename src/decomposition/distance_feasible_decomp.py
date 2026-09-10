@@ -92,15 +92,17 @@ def validate_task_completion(
     completion_radius: float = 8.0,
 ) -> bool:
     """Validate that the assigned team is valid, covers all required skills,
-    and all assigned agents have arrived within completion_radius of the target."""
+    and all assigned agents are within completion_radius of the target."""
     if not agent_ids or subtask.completed:
         return False
     if not validate_assignment_skills(agent_ids, subtask, fleet):
         return False
-    agents = [fleet.get_agent(aid) for aid in agent_ids]
-    for a in agents:
-        if dist(a.position, subtask.target) >= completion_radius:
+
+    for aid in agent_ids:
+        agent = fleet.get_agent(aid)
+        if agent is None or dist(agent.position, subtask.target) >= completion_radius:
             return False
+
     return True
 
 
@@ -142,38 +144,45 @@ class DistanceFeasibleDecomposer:
         instruction: str,
         fleet: AgentFleet,
         subtasks: list[Subtask],
+        distance_matrix: list[list[float]] | None = None,
     ) -> dict[str, list[str]]:
-        """Extended Eq 12: T = LLM(I, E, Delta, D(t))."""
-        d_matrix = fleet.agents
-        from src.env.agents import distance_matrix
-
-        dist_mat = distance_matrix(d_matrix).tolist()
+        """Decompose mission into task assignments that satisfy delta_feasibility (Gap 1)."""
         agents_ctx = fleet.to_dict_list()
         subtasks_ctx = [
-            {
-                "id": s.subtask_id,
-                "target": [s.target.x, s.target.y],
-                "skills": s.required_skills,
-            }
+            {"id": s.subtask_id, "skills": s.required_skills, "target": [s.target.x, s.target.y]}
             for s in subtasks
         ]
+
         raw_assignments = self.cloud_llm.decompose(
-            instruction, agents_ctx, subtasks_ctx, dist_mat
+            instruction,
+            agents_ctx,
+            subtasks_ctx,
+            distance_matrix=distance_matrix,
         )
-        # Filter invalid agent IDs returned by the LLM
+
+        return self.validate_assignments(raw_assignments, fleet, subtasks)
+
+    def validate_assignments(
+        self,
+        raw_assignments: dict[str, list[str]],
+        fleet: AgentFleet,
+        subtasks: list[Subtask],
+    ) -> dict[str, list[str]]:
+        """Filter out unknown agents and validate assignments using feasibility metric."""
         valid_ids = {a.agent_id for a in fleet.agents}
 
         for task_id, ids in raw_assignments.items():
             if isinstance(ids, str):
                 ids = [ids]
 
-            filtered = [aid for aid in ids if aid in valid_ids]
+            # Reject unknown IDs immediately: do not silently discard unknown IDs and validate remaining members
+            if any(aid not in valid_ids for aid in ids):
+                removed = set(ids) - valid_ids
+                print(f"[WARNING] Invalid IDs for {task_id}: {removed} -- rejecting assignment")
+                raw_assignments[task_id] = []
+            else:
+                raw_assignments[task_id] = list(ids)
 
-            if len(filtered) != len(ids):
-                removed = set(ids) - set(filtered)
-                print(f"[WARNING] Invalid IDs for {task_id}: {removed}")
-
-            raw_assignments[task_id] = filtered
 
         validated: dict[str, list[str]] = {}
         assigned_agent_ids: set[str] = set()

@@ -36,6 +36,7 @@ class CentralizedHybridCoordinator:
     continuity_engine: Any | None = None
     plan_repairer: Any | None = None
     experience_store: Any | None = None
+    nmpc: NMPCController = field(default_factory=NMPCController)
     # Delta dispatch: track last dispatched assignment state to suppress
     # redundant Device LLM dispatch calls when assignments haven't changed.
     _last_dispatched_assignments: dict[str, list[str]] = field(default_factory=dict)
@@ -110,16 +111,16 @@ class CentralizedHybridCoordinator:
                 if isinstance(candidate_agents, str):
                     candidate_agents = [candidate_agents]
                 valid_ids = {a.agent_id for a in fleet.agents}
-                filtered_candidates = [aid for aid in candidate_agents if aid in valid_ids]
                 if (
-                    filtered_candidates
-                    and not any(aid in reused_agents for aid in filtered_candidates)
-                    and validate_joint_assignment(filtered_candidates, st, fleet, c_task, r_reach)
+                    candidate_agents
+                    and all(aid in valid_ids for aid in candidate_agents)
+                    and not any(aid in reused_agents for aid in candidate_agents)
+                    and validate_joint_assignment(candidate_agents, st, fleet, c_task, r_reach)
                 ):
-                    reused[st.subtask_id] = filtered_candidates
-                    reused_agents.update(filtered_candidates)
+                    reused[st.subtask_id] = candidate_agents
+                    reused_agents.update(candidate_agents)
                     self.experience_store.reuse_hits += 1
-                    print(f"[EXPERIENCE-REUSE] Reused plan for subtask {st.subtask_id}: {filtered_candidates}")
+                    print(f"[EXPERIENCE-REUSE] Reused plan for subtask {st.subtask_id}: {candidate_agents}")
 
         return reused
 
