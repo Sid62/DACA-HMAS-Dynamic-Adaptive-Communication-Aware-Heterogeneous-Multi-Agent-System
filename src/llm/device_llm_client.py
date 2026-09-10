@@ -412,16 +412,7 @@ class DeviceLLMClient:
             if isinstance(agents, list):
                 return json.dumps({"coalitions": self._mock_coalitions_from_inputs(agents)})
         if "dispatch" in pl:
-            coalitions_data = self._extract_labeled_json(prompt, "Coalitions")
-            assignments = {}
-            if isinstance(coalitions_data, list):
-                for i, c in enumerate(coalitions_data):
-                    members = c.get("members", [])
-                    cid = c.get("coalition_id", c.get("id", i))
-                    for m in members:
-                        if m in managed:
-                            assignments[m] = f"T_{cid}"
-            return json.dumps({"dispatched": True, "domain": self.node_id, "assignments": assignments})
+            return json.dumps({"dispatched": True, "assignments": {}})
         if "plan_local" in pl or "plan locally" in pl:
             assignments = {aid: f"T_{i}" for i, aid in enumerate(managed)}
             return json.dumps({

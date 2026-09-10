@@ -33,10 +33,6 @@ from src.metrics.communication_counter import CommunicationStepCounter
 from src.reallocation.post_switch import PostSwitchReallocator
 from src.llm.exceptions import ExperimentFailed
 from src.coordination.replan_trigger import PlanState, should_replan, update_plan_state
-from src.coordination.autohma_structs import (
-    DeviceFeedback,
-    ExecutionFeedback,
-)
 
 
 
@@ -285,10 +281,6 @@ class DACAOrchestrator:
         tfr_history: list[float] = []
         cfr_history: list[float] = []
         prev_mode = self.acds.mode
-        # AutoHMA alignment: accumulated Device-level execution feedbacks
-        # for centralized mode Cloud LLM prompt injection (self-correction).
-        # NOT used in decentralized mode (stays local/peer only).
-        device_feedbacks: list[DeviceFeedback] = []
 
         for step in range(self.max_steps):
             t_sim_step_start = time.perf_counter()
@@ -424,110 +416,6 @@ class DACAOrchestrator:
                     coalitions = self.reallocator.reallocate(
                         fleet, self.env.subtask_list, coalitions, dist_mat, cqi_matrix
                     )
-                    # ── Derive validated assignments from reallocated coalitions ──
-                    # The reallocator returns coalition metadata (members list),
-                    # not task→agent assignments. We must derive assignments
-                    # respecting the same invariants the reallocator checks:
-                    #   1. Skill coverage (required_skills ⊆ agent.skills)
-                    #   2. Distance feasibility (d < R_reach)
-                    #   3. No duplicate assignment
-                    #   4. Completed tasks preserved (not reassigned)
-                    r_reach = self.thresholds.get("R_reach", 100.0)
-                    new_assignments: dict[str, list[str]] = {}
-                    remaining_subtasks = [
-                        s for s in self.env.subtask_list if not s.completed
-                    ]
-                    # Collect all agents from new coalitions
-                    all_coalition_agents: list[str] = []
-                    for c in coalitions:
-                        all_coalition_agents.extend(c.get("members", []))
-                    agent_skills = {a.agent_id: set(a.skills) for a in fleet.agents}
-                    assigned_agents: set[str] = set()
-
-                    for st in remaining_subtasks:
-                        required = set(st.required_skills)
-                        best_aid: str | None = None
-                        best_d = float("inf")
-
-                        # Pass 1: skill-matching agents within R_reach
-                        for aid in all_coalition_agents:
-                            if aid in assigned_agents:
-                                continue
-                            if not fleet.has_agent(aid):
-                                continue
-                            skills = agent_skills.get(aid, set())
-                            if not required.issubset(skills):
-                                continue
-                            agent = fleet.get_agent(aid)
-                            d = dist(agent.position, st.target)
-                            if d > r_reach:
-                                continue
-                            if d < best_d:
-                                best_d = d
-                                best_aid = aid
-
-                        # Pass 2 (fallback): skill-matching but beyond R_reach
-                        if best_aid is None:
-                            for aid in all_coalition_agents:
-                                if aid in assigned_agents:
-                                    continue
-                                if not fleet.has_agent(aid):
-                                    continue
-                                skills = agent_skills.get(aid, set())
-                                if not required.issubset(skills):
-                                    continue
-                                agent = fleet.get_agent(aid)
-                                d = dist(agent.position, st.target)
-                                if d < best_d:
-                                    best_d = d
-                                    best_aid = aid
-
-                        # Pass 3: Multi-agent pair within coalition collectively covering required skills
-                        if best_aid is None:
-                            best_pair = None
-                            best_pair_d = float("inf")
-                            coal_cands = [aid for aid in all_coalition_agents if aid not in assigned_agents and fleet.has_agent(aid)]
-                            for i in range(len(coal_cands)):
-                                for j in range(i + 1, len(coal_cands)):
-                                    aid1, aid2 = coal_cands[i], coal_cands[j]
-                                    if required.issubset(agent_skills.get(aid1, set()) | agent_skills.get(aid2, set())):
-                                        d_sum = dist(fleet.get_agent(aid1).position, st.target) + dist(fleet.get_agent(aid2).position, st.target)
-                                        if d_sum < best_pair_d:
-                                            best_pair_d = d_sum
-                                            best_pair = [aid1, aid2]
-                            if best_pair is not None:
-                                new_assignments[st.subtask_id] = best_pair
-                                assigned_agents.update(best_pair)
-                        else:
-                            new_assignments[st.subtask_id] = [best_aid]
-                            assigned_agents.add(best_aid)
-
-                        if st.subtask_id not in new_assignments and st.subtask_id in assignments:
-                            # Only preserve prior assignment if it covers required skills
-                            from src.decomposition.distance_feasible_decomp import validate_assignment_skills
-                            if validate_assignment_skills(assignments[st.subtask_id], st, fleet):
-                                new_assignments[st.subtask_id] = assignments[st.subtask_id]
-
-
-                    if new_assignments:
-                        assignments = new_assignments
-                        print(
-                            f"[REALLOC] Propagated validated assignments: "
-                            f"{list(assignments.keys())}"
-                        )
-                        # Update plan state so replanning logic sees the new state
-                        update_plan_state(
-                            self._plan_state,
-                            self.env.subtask_list,
-                            fleet,
-                            coalitions,
-                            assignments,
-                            mode=mode,
-                            sys_cqi=sys_cqi,
-                            packet_loss=avg_packet_loss,
-                            latency=avg_latency,
-                            current_step=step,
-                        )
                     t_realloc_end = time.perf_counter()
                     realloc_dur = t_realloc_end - t_realloc_start
                     coalition_computation_time_s += realloc_dur
@@ -563,14 +451,9 @@ class DACAOrchestrator:
 
                 t_plan = time.perf_counter()
                 if mode == 0:
-                    assignments, coalitions, cloud_reasoned, dispatch_occurred = self.centralized.plan(
-                        self.env, cqi_matrix,
-                        device_feedbacks=device_feedbacks if device_feedbacks else None,
-                    )
+                    assignments, coalitions, cloud_reasoned, dispatch_occurred = self.centralized.plan(self.env, cqi_matrix)
                     if cloud_reasoned:
                         self.comm_counter.increment("global_planning", 1, "centralized_global_planning")
-                        # AutoHMA: feedback was consumed by Cloud, clear for next cycle
-                        device_feedbacks.clear()
                     if dispatch_occurred:
                         self.comm_counter.increment("dispatch", 1, "centralized_domain_dispatch")
                     print(">>>> USING CENTRALIZED")
@@ -632,14 +515,10 @@ class DACAOrchestrator:
                 cfr_history.append(cfr)
 
             targets = {s.subtask_id: s.target for s in self.env.subtask_list}
-            if mode == 0:
-                # AutoHMA centralized execution: consume Device LLM ExecutionDirectives
-                agent_assignments = self.centralized.extract_executable_assignments(assignments)
-            else:
-                agent_assignments = {}
-                for sid, agents in assignments.items():
-                    if agents:
-                        agent_assignments[agents[0]] = sid
+            agent_assignments = {}
+            for sid, agents in assignments.items():
+                if agents:
+                    agent_assignments[agents[0]] = sid
 
             t_sim_body = time.perf_counter()
             self.ca_transfer.step(self.env.fleet, mode, agent_assignments, targets)
@@ -647,12 +526,12 @@ class DACAOrchestrator:
             for sid, agent_list in assignments.items():
                 if not agent_list:
                     continue
+                agent = fleet.get_agent(agent_list[0])
                 subtask = next(
                     (s for s in self.env.subtask_list if s.subtask_id == sid), None
                 )
                 if subtask:
-                    agent = fleet.get_agent(agent_list[0]) if fleet.has_agent(agent_list[0]) else None
-                    if agent and step % 50 == 0:
+                    if step % 50 == 0:
                        print(
                            f"[DIST] Step={step} "
                            f"Task={sid} "
@@ -660,18 +539,17 @@ class DACAOrchestrator:
                            f"Distance={dist(agent.position, subtask.target):.2f}"
                        )
                     from src.coordination.constants import COMPLETION_RADIUS_M
-                    from src.decomposition.distance_feasible_decomp import validate_task_completion
-                    if validate_task_completion(agent_list, subtask, fleet, COMPLETION_RADIUS_M):
+                    if dist(agent.position, subtask.target) < COMPLETION_RADIUS_M:
                         was_completed = subtask.completed
                         self.env.mark_subtask_complete(sid)
                         if not was_completed and hasattr(self, "experience_store") and self.experience_store is not None and self.experience_store.enabled:
                             from src.memory.experience_store import compute_signature
                             agent_types = [a.agent_type.value for a in fleet.agents]
-                            d_lead = dist(agent.position, subtask.target) if agent else 0.0
+                            d_lead = dist(agent.position, subtask.target)
                             sig = compute_signature(self.scenario, subtask.required_skills, agent_types, d_lead)
                             self.experience_store.record(
                                 signature=sig,
-                                plan={sid: list(agent_list)},
+                                plan={sid: assignments.get(sid, [agent.agent_id])},
                                 success=True,
                                 scenario=self.scenario,
                                 skills=subtask.required_skills,
@@ -680,52 +558,6 @@ class DACAOrchestrator:
 
             self.env.advance()
             simulation_computation_time_s += (time.perf_counter() - t_sim_body)
-
-            # ── AutoHMA feedback collection (centralized mode only) ──
-            # Generative Agent → Device LLM review → Cloud LLM context
-            # Reads existing agent state — zero new computation.
-            if mode == 0:
-                domains = discover_agent_type_domains(fleet)
-                for domain_id, domain_agent_ids in domains.items():
-                    agent_fbs: list[ExecutionFeedback] = []
-                    completed_tasks: list[str] = []
-                    in_progress_tasks: list[str] = []
-                    for aid in domain_agent_ids:
-                        agent_obj = fleet.get_agent(aid)
-                        if agent_obj is None:
-                            continue
-                        # Find this agent's assigned subtask
-                        assigned_sid = None
-                        for sid, agent_list in assignments.items():
-                            if aid in agent_list:
-                                assigned_sid = sid
-                                break
-                        if assigned_sid is None:
-                            continue
-                        st = next((s for s in self.env.subtask_list if s.subtask_id == assigned_sid), None)
-                        if st is None:
-                            continue
-                        d = dist(agent_obj.position, st.target)
-                        fb = ExecutionFeedback(
-                            agent_id=aid,
-                            subtask_id=assigned_sid,
-                            distance_to_target=round(d, 2),
-                            completed=st.completed,
-                            step=step,
-                        )
-                        agent_fbs.append(fb)
-                        if st.completed:
-                            completed_tasks.append(assigned_sid)
-                        else:
-                            in_progress_tasks.append(assigned_sid)
-                    if agent_fbs:
-                        device_feedbacks.append(DeviceFeedback(
-                            domain_id=domain_id,
-                            agent_feedbacks=agent_fbs,
-                            tasks_completed=completed_tasks,
-                            tasks_in_progress=in_progress_tasks,
-                            step=step,
-                        ))
             if step % 20 == 0:
                 print(
                     f"[MISSION] Step={step} "

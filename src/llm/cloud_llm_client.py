@@ -595,7 +595,6 @@ class CloudLLMClient:
         agents: list[dict],
         subtasks: list[dict],
         distance_matrix: list[list[float]] | None = None,
-        execution_feedback_context: str | None = None,
     ) -> dict[str, list[str]]:
         from src.config import get_thresholds
         from src.llm.prompts import format_prompt
@@ -641,11 +640,7 @@ class CloudLLMClient:
                     f"Context: {json.dumps({'agents': agents, 'subtasks': subtasks, 'distance_matrix': distance_matrix})}\n"
                     'Return JSON: {"assignments": {"T_0": ["agent_ids"], ...}}'
                 )
-
-        # AutoHMA self-correction: inject prior execution feedback into existing prompt
-        if execution_feedback_context:
-            prompt = prompt + "\n" + execution_feedback_context
-
+        
         raw = self.complete(prompt, system="You are a Cloud LLM task decomposer.", caller="decompose")
         if raw == _FAILURE_SENTINEL:
             _log("decompose() degraded: cloud LLM unavailable")
@@ -680,7 +675,6 @@ class CloudLLMClient:
         agents: list[dict],
         distance_matrix: list[list[float]] | None = None,
         cqi_matrix: list[list[float]] | None = None,
-        execution_feedback_context: str | None = None,
     ) -> list[dict]:
         from src.config import get_thresholds
         from src.llm.prompts import format_prompt
@@ -724,11 +718,6 @@ class CloudLLMClient:
                     f"Context: {json.dumps({'subtasks': subtasks, 'agents': agents, 'D': distance_matrix, 'Q': cqi_matrix})}\n"
                     'Return JSON: {"coalitions": [{"coalition_id": 0, "members": ["id1"]}]}'
                 )
-
-        # AutoHMA self-correction: inject prior execution feedback into existing prompt
-        if execution_feedback_context:
-            prompt = prompt + "\n" + execution_feedback_context
-
         raw = self.complete(prompt, system="You are a Cloud LLM coalition planner.", caller="form_coalitions")
         if raw == _FAILURE_SENTINEL:
             _log("form_coalitions() degraded: cloud LLM unavailable")

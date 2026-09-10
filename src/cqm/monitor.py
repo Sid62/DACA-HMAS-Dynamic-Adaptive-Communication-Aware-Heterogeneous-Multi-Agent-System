@@ -114,12 +114,7 @@ class CommunicationQualityMonitor:
         stats.bytes_capacity.append(net.bytes_capacity)
 
     def update_pairwise(self, distance_matrix: np.ndarray, c1: float) -> np.ndarray:
-        """Build N x N pairwise CQI matrix Q(t).
-
-        Eq 23: Psi_ij = [d_ij <= C1] * CQI(t).
-        Uses system-level CQI as the link quality for all in-range pairs.
-        Out-of-range pairs (d > C1) get zero — binary connectivity gating.
-        """
+        """Build N x N pairwise CQI matrix Q(t)."""
         n = distance_matrix.shape[0]
         q = np.zeros((n, n))
         sys_cqi = self.system_cqi()

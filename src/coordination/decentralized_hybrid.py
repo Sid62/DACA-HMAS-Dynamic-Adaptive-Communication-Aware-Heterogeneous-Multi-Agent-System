@@ -440,12 +440,7 @@ class DecentralizedHybridCoordinator:
                 reason = reason or "coalition_broken"
 
             if reason and reason != "poor_cloud_comm":
-                subtask = next((s for s in env.subtask_list if s.subtask_id == sid), None)
-                required = set(subtask.required_skills) if subtask else set()
-                candidates = [
-                    a for a in domain_map.get(domain, [])
-                    if a in live_agent_ids and (not required or required.issubset(set(fleet.get_agent(a).skills)))
-                ]
+                candidates = [a for a in domain_map.get(domain, []) if a in live_agent_ids]
                 if not candidates:
                     continue
                 new_agent = min(
@@ -455,7 +450,6 @@ class DecentralizedHybridCoordinator:
                     assignments_map[sid] = [new_agent]
                     self.local_reallocation_count += 1
                     print(f"[LOCAL-REALLOC] {sid}: {current_agent} -> {new_agent} ({reason})")
-
 
     def _try_experience_reuse(
         self,
@@ -606,9 +600,8 @@ class DecentralizedHybridCoordinator:
         for sid, agent_list in assignments.items():
             if not agent_list:
                 continue
+            agent = env.fleet.get_agent(agent_list[0])
             subtask = next((s for s in env.subtask_list if s.subtask_id == sid), None)
             from src.coordination.constants import COMPLETION_RADIUS_M
-            from src.decomposition.distance_feasible_decomp import validate_task_completion
-            if subtask and validate_task_completion(agent_list, subtask, env.fleet, COMPLETION_RADIUS_M):
+            if subtask and dist(agent.position, subtask.target) < COMPLETION_RADIUS_M:
                 env.mark_subtask_complete(sid)
-

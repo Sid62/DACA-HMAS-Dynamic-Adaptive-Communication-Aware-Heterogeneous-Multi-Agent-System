@@ -43,18 +43,6 @@ class AgentState:
     communication_range: float = 50.0
     sensor_range: float = 30.0
 
-    def __post_init__(self) -> None:
-        if not self.skills:
-            role_defaults = {
-                AgentType.UAV: ["transport", "navigate", "sense", "inspect"],
-                AgentType.VEHICLE: ["transport", "navigate", "inspect"],
-                AgentType.ROBOT: ["lift", "transport", "rescue", "sense", "inspect"],
-            }
-            default_skills = role_defaults.get(self.agent_type)
-            if default_skills:
-                self.skills = list(default_skills)
-
-
 def dist(p1: Position | np.ndarray, p2: Position | np.ndarray) -> float:
     """Euclidean distance (Eqs 4-5)."""
     a = p1.as_array() if isinstance(p1, Position) else np.asarray(p1)
@@ -207,11 +195,7 @@ def create_fleet_from_scenario(
     """Instantiate heterogeneous fleet for a scenario."""
     rng = np.random.default_rng(seed)
     agents: list[AgentState] = []
-    role_skills = {
-        AgentType.UAV: ["transport", "navigate", "sense", "inspect"],
-        AgentType.VEHICLE: ["transport", "navigate", "inspect"],
-        AgentType.ROBOT: ["lift", "transport", "rescue", "sense", "inspect"],
-    }
+    skill_pool = ["transport", "inspect", "lift", "navigate", "sense", "rescue"]
     idx = 0
     for agent_type, count_key in [
         (AgentType.UAV, "num_uav"),
@@ -230,7 +214,7 @@ def create_fleet_from_scenario(
                         y=float(rng.uniform(0, 200)),
                     ),
                     heading=float(rng.uniform(0, 2 * math.pi)),
-                    skills=list(role_skills[agent_type]),
+                    skills=list(rng.choice(skill_pool, size=2, replace=False)),
                 )
             )
             idx += 1

@@ -207,21 +207,19 @@ class PlanContinuityEngine:
         locked_assignments = {sid: list(agents) for sid, agents in new_assignments.items()}
         locked_agent_ids: set[str] = set()
 
-        from src.decomposition.distance_feasible_decomp import validate_assignment_skills
-
         for st in subtasks:
             if st.completed:
                 continue
             sid = st.subtask_id
             prev_agents = previous_assignments.get(sid, [])
-            if prev_agents and validate_assignment_skills(prev_agents, st, fleet):
-                lead_aid = prev_agents[0]
-                if lead_aid in agent_map:
-                    agent = agent_map[lead_aid]
+            if prev_agents:
+                aid = prev_agents[0]
+                if aid in agent_map:
+                    agent = agent_map[aid]
                     if dist(agent.position, st.target) < lock_threshold:
-                        # Lock valid agent(s) to this subtask
-                        locked_assignments[sid] = list(prev_agents)
-                        locked_agent_ids.update(prev_agents)
+                        # Lock agent to this subtask
+                        locked_assignments[sid] = [aid]
+                        locked_agent_ids.add(aid)
 
         # Clear duplicate assignments for locked agents in other subtasks
         for sid, agents in locked_assignments.items():
@@ -249,9 +247,7 @@ class PlanContinuityEngine:
         if not incomplete_subtasks:
             return {}
 
-        from src.decomposition.distance_feasible_decomp import validate_assignment_skills
-
-        # 1. Filter assignments to incomplete subtasks only (verifying skill coverage)
+        # 1. Filter assignments to incomplete subtasks only
         updated_assignments: dict[str, list[str]] = {}
         assigned_agents: set[str] = set()
 
@@ -259,7 +255,7 @@ class PlanContinuityEngine:
         for s in incomplete_subtasks:
             sid = s.subtask_id
             curr_agents = [aid for aid in ctx.assignments.get(sid, []) if aid in agent_map]
-            if curr_agents and validate_assignment_skills(curr_agents, s, fleet):
+            if curr_agents:
                 updated_assignments[sid] = curr_agents
                 assigned_agents.update(curr_agents)
             else:
@@ -279,13 +275,14 @@ class PlanContinuityEngine:
                             aid for aid in freed_agents
                             if set(st.required_skills).issubset(set(agent_map[aid].skills)) or not st.required_skills
                         ]
+                        if not eligible:
+                            eligible = list(freed_agents)
                         if eligible:
                             best_agent = min(
                                 eligible, key=lambda aid: dist(agent_map[aid].position, st.target)
                             )
                             updated_assignments[sid] = [best_agent]
                             freed_agents.remove(best_agent)
-                            assigned_agents.add(best_agent)
 
         # 4. Apply Target Commitment Locking
         updated_assignments = self.apply_target_commitment_lock(
@@ -296,7 +293,6 @@ class PlanContinuityEngine:
         ctx.assignments = updated_assignments
         ctx.completed_subtask_ids = {s.subtask_id for s in subtasks if s.completed}
         return updated_assignments
-
 
 
     def can_continue_plan(

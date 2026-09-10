@@ -209,13 +209,7 @@ class NetworkConditionGenerator:
             latency=latency,
             bandwidth_utilization=1.0 - bw_avail,
             bytes_capacity=payload_bytes,
-            # bytes_delivered represents offered channel throughput
-            # (payload × available bandwidth fraction), NOT effective
-            # delivered throughput. Delivery success/failure is captured
-            # independently by ack_received / delivery_outcomes so that
-            # the CQM packet-loss and bandwidth terms remain statistically
-            # independent quality dimensions (Eq 17a vs Eq 17c).
-            bytes_delivered=delivered,
+            bytes_delivered=delivered if ack else 0.0,
             msg_sent=msg_sent,
             ack_received=ack,
         )
