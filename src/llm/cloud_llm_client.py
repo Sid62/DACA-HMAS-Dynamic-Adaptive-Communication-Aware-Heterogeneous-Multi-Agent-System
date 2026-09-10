@@ -501,7 +501,25 @@ class CloudLLMClient:
             return assignments
         for i, st in enumerate(subtasks):
             st_id = str(st.get("id", st.get("subtask_id", f"T_{i}")))
-            assignments[st_id] = [self._agent_id(agents[i % len(agents)])]
+            req_skills = set(st.get("skills", st.get("required_skills", [])))
+            chosen = []
+            for a in agents:
+                a_skills = set(a.get("skills", []))
+                if req_skills and req_skills.issubset(a_skills):
+                    chosen = [self._agent_id(a)]
+                    break
+            if not chosen and req_skills:
+                accum = set()
+                for a in agents:
+                    a_skills = set(a.get("skills", []))
+                    if a_skills & req_skills:
+                        accum.update(a_skills)
+                        chosen.append(self._agent_id(a))
+                        if req_skills.issubset(accum):
+                            break
+            if not chosen:
+                chosen = [self._agent_id(agents[i % len(agents)])]
+            assignments[st_id] = chosen
         return assignments
 
     def _mock_coalitions_from_inputs(self, agents: list[dict]) -> list[dict]:
@@ -596,6 +614,7 @@ class CloudLLMClient:
         subtasks: list[dict],
         distance_matrix: list[list[float]] | None = None,
     ) -> dict[str, list[str]]:
+        import math
         from src.config import get_thresholds
         from src.llm.prompts import format_prompt
 
@@ -603,15 +622,85 @@ class CloudLLMClient:
 
         # Optimization 1 & 4: State Summarization & Semantic Cache Lookup
         summary_res = self.summarizer.summarize_decomposition_context(
-            instruction, agents, subtasks, distance_matrix
+            instruction,
+            agents,
+            subtasks,
+            distance_matrix,
+            c_task=float(th.get("C_task", 30.0)),
+            r_reach=float(th.get("R_reach", 100.0)),
         )
         self.prompt_reduction_percent = summary_res.prompt_reduction_percent
 
+        # Estimate uncompressed request tokens for accurate savings tracking
+        try:
+            uncompressed_prompt = format_prompt(
+                "decomposition",
+                instruction=instruction,
+                agents=json.dumps(agents),
+                subtasks=json.dumps(subtasks),
+                distance_matrix=json.dumps(distance_matrix),
+                c_task=str(th.get("C_task", 30.0)),
+                r_reach=str(th.get("R_reach", 100.0)),
+            )
+        except (FileNotFoundError, KeyError, Exception):
+            uncompressed_prompt = (
+                "Decompose the mission into subtask assignments.\n"
+                f"Instruction: {instruction}\n"
+                f"Context: {json.dumps({'agents': agents, 'subtasks': subtasks, 'distance_matrix': distance_matrix})}\n"
+                'Return JSON: {"assignments": {"T_0": ["agent_ids"], ...}}'
+            )
+        orig_tokens = len(uncompressed_prompt.split()) + 50
+
+        def validate_decomp_plan(plan: Any) -> bool:
+            if not isinstance(plan, dict) or not plan:
+                return False
+            agent_map = {str(a.get("id", a.get("agent_id"))): a for a in agents}
+            r_reach = float(th.get("R_reach", 100.0))
+            c_task = float(th.get("C_task", 30.0))
+            for st in subtasks:
+                sid = str(st.get("id", st.get("subtask_id")))
+                assigned = plan.get(sid, [])
+                if not assigned or not isinstance(assigned, list):
+                    return False
+                team_skills = set()
+                for aid in assigned:
+                    if aid not in agent_map:
+                        return False
+                    team_skills.update(agent_map[aid].get("skills", []))
+                req_skills = set(st.get("skills", st.get("required_skills", [])))
+                if not req_skills.issubset(team_skills):
+                    return False
+                target = st.get("target")
+                if target and isinstance(target, (list, tuple)) and len(target) >= 2:
+                    for aid in assigned:
+                        apos = agent_map[aid].get("pos", agent_map[aid].get("position"))
+                        if apos and isinstance(apos, (list, tuple)) and len(apos) >= 2:
+                            d = math.hypot(apos[0] - target[0], apos[1] - target[1])
+                            if d > r_reach:
+                                return False
+                    if len(assigned) > 1:
+                        for i in range(len(assigned)):
+                            for j in range(i + 1, len(assigned)):
+                                p1 = agent_map[assigned[i]].get("pos", agent_map[assigned[i]].get("position"))
+                                p2 = agent_map[assigned[j]].get("pos", agent_map[assigned[j]].get("position"))
+                                if (
+                                    p1 and p2 and isinstance(p1, (list, tuple)) and isinstance(p2, (list, tuple))
+                                    and len(p1) >= 2 and len(p2) >= 2
+                                ):
+                                    if math.hypot(p1[0] - p2[0], p1[1] - p2[1]) > c_task:
+                                        return False
+            return True
+
         cached_plan = self.semantic_cache.lookup(
-            summary_res.summary_dict, getattr(self, "current_step", 0)
+            summary_res.summary_dict,
+            current_step=getattr(self, "current_step", 0),
+            operation="decompose",
+            validator=validate_decomp_plan,
+            original_tokens=orig_tokens,
         )
         if cached_plan is not None:
             self._last_assignments = cached_plan
+            self.usage.cache_hits += 1
             return cached_plan
 
         # Optimization 2: Compressed Prompting
@@ -660,13 +749,15 @@ class CloudLLMClient:
         result = self._parse_assignments_response(raw)
         if result:
             self._last_assignments = result
-            self.semantic_cache.put(
-                summary_res.summary_dict,
-                result,
-                tokens=200,
-                latency=0.05,
-                current_step=getattr(self, "current_step", 0),
-            )
+            if validate_decomp_plan(result):
+                self.semantic_cache.put(
+                    summary_res.summary_dict,
+                    result,
+                    tokens=orig_tokens,
+                    latency=0.05,
+                    current_step=getattr(self, "current_step", 0),
+                    operation="decompose",
+                )
         return result
 
     def form_coalitions(
@@ -683,15 +774,75 @@ class CloudLLMClient:
 
         # Optimization 1 & 4: State Summarization & Semantic Cache Lookup
         summary_res = self.summarizer.summarize_coalition_context(
-            subtasks, agents, distance_matrix or [], cqi_matrix or []
+            subtasks,
+            agents,
+            distance_matrix or [],
+            cqi_matrix or [],
+            gamma_min=float(th.get("gamma_min", 0.3)),
+            c1=float(th.get("C1", 50.0)),
         )
         self.prompt_reduction_percent = summary_res.prompt_reduction_percent
 
+        # Estimate uncompressed request tokens for accurate savings tracking
+        try:
+            uncompressed_prompt = format_prompt(
+                "coalition",
+                subtasks=json.dumps(subtasks),
+                agents=json.dumps(agents),
+                distance_matrix=json.dumps(distance_matrix),
+                cqi_matrix=json.dumps(cqi_matrix),
+                c1=str(th.get("C1", 50.0)),
+                gamma_min=str(th.get("gamma_min", 0.3)),
+            )
+        except (FileNotFoundError, KeyError, Exception):
+            uncompressed_prompt = (
+                "Form agent coalitions for subtask execution.\n"
+                f"Context: {json.dumps({'subtasks': subtasks, 'agents': agents, 'D': distance_matrix, 'Q': cqi_matrix})}\n"
+                'Return JSON: {"coalitions": [{"coalition_id": 0, "members": ["id1"]}]}'
+            )
+        orig_tokens = len(uncompressed_prompt.split()) + 50
+
+        def validate_coalition_plan(coalitions_list: Any) -> bool:
+            if not isinstance(coalitions_list, list) or not coalitions_list:
+                return False
+            agent_ids = {str(a.get("id", a.get("agent_id"))) for a in agents if a.get("id") or a.get("agent_id")}
+            seen_agents = set()
+            for c in coalitions_list:
+                if not isinstance(c, dict):
+                    return False
+                members = c.get("members", [])
+                if not members or not isinstance(members, list):
+                    return False
+                for mid in members:
+                    if mid not in agent_ids:
+                        return False
+                    if mid in seen_agents:
+                        return False
+                    seen_agents.add(mid)
+            if cqi_matrix and len(cqi_matrix) == len(agents):
+                id_to_idx = {str(a.get("id", a.get("agent_id"))): idx for idx, a in enumerate(agents)}
+                gamma_min = float(th.get("gamma_min", 0.3))
+                for c in coalitions_list:
+                    members = c.get("members", [])
+                    for i in range(len(members)):
+                        for j in range(i + 1, len(members)):
+                            idx_i = id_to_idx.get(members[i])
+                            idx_j = id_to_idx.get(members[j])
+                            if idx_i is not None and idx_j is not None:
+                                if cqi_matrix[idx_i][idx_j] < gamma_min:
+                                    return False
+            return True
+
         cached_coalitions = self.semantic_cache.lookup(
-            summary_res.summary_dict, getattr(self, "current_step", 0)
+            summary_res.summary_dict,
+            current_step=getattr(self, "current_step", 0),
+            operation="coalition",
+            validator=validate_coalition_plan,
+            original_tokens=orig_tokens,
         )
         if cached_coalitions is not None:
             self._last_coalitions = cached_coalitions
+            self.usage.cache_hits += 1
             return cached_coalitions
 
         # Optimization 2: Compressed Prompting
@@ -850,6 +1001,15 @@ class CloudLLMClient:
 
         if result:
             self._last_coalitions = result
+            if validate_coalition_plan(result):
+                self.semantic_cache.put(
+                    summary_res.summary_dict,
+                    result,
+                    tokens=orig_tokens,
+                    latency=0.05,
+                    current_step=getattr(self, "current_step", 0),
+                    operation="coalition",
+                )
         return result
 
     def _parse_json(self, text: str) -> dict:
