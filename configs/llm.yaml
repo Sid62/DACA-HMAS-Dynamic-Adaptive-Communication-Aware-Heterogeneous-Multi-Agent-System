@@ -3,7 +3,7 @@ cloud:
   provider: nvidia
   api_key_env: NVIDIA_API_KEY
   base_url: https://integrate.api.nvidia.com/v1
-  model: meta/llama-3.1-8b-instruct
+  model: nvidia/nemotron-3.5-lightning-30b-a3b
   temperature: 0.0
   max_tokens: 1024
   timeout: 420
@@ -40,8 +40,8 @@ device:
   model: Qwen/Qwen2.5-3B-Instruct
   base_url: http://localhost:8000/v1
   max_tokens: 200
-  temperature: 0.1
-  memory_mb: 8192 
+  temperature: 0.0
+
 
 
 # Set false to use real Cloud API + local GPU Device LLM
