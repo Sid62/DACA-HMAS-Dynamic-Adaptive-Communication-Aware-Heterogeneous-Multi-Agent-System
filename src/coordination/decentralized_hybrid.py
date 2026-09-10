@@ -616,3 +616,5 @@ class DecentralizedHybridCoordinator:
                 from src.decomposition.distance_feasible_decomp import validate_task_completion
                 if validate_task_completion(agent_list, subtask, env.fleet, COMPLETION_RADIUS_M):
                     env.mark_subtask_complete(sid)
+                    if self.continuity_engine is not None:
+                        self.continuity_engine.mark_subtask_completed(sid)

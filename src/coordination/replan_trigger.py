@@ -167,6 +167,7 @@ def should_replan(
         if continuity_engine is not None and continuity_engine.can_continue_plan(
             fleet, subtasks, cqi_matrix, sys_cqi, packet_loss, latency
         ):
+            plan_state.known_completed_ids.update(newly_completed)
             return False, ""
         return True, f"task_completed_needs_reassignment:{sorted(newly_completed)}"
 
@@ -259,6 +260,7 @@ def update_plan_state(
     plan_state.known_packet_loss = packet_loss
     plan_state.known_latency = latency
     plan_state.known_subtask_ids = {s.subtask_id for s in subtasks}
+    plan_state.known_completed_ids = {s.subtask_id for s in subtasks if s.completed}
     plan_state.coalition_members = {
         c.get("coalition_id"): frozenset(c.get("members", [])) for c in coalitions
     }

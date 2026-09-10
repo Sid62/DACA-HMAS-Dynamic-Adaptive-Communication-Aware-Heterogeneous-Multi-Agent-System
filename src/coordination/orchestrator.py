@@ -492,6 +492,14 @@ class DACAOrchestrator:
                 )
             else:
                 print(f"[REPLAN] step={step} skipped -- reusing existing plan")
+                if self.continuity_engine is not None and self.continuity_engine.active_context is not None:
+                    # Authoritative execution state from continuity engine
+                    assignments = dict(self.continuity_engine.active_context.assignments)
+                    completed_sids = {s.subtask_id for s in self.env.subtask_list if s.completed} | self.continuity_engine.active_context.completed_subtask_ids
+                    assignments = {sid: aids for sid, aids in assignments.items() if sid not in completed_sids}
+                    if mode == 0 and assignments != self.centralized._last_dispatched_assignments:
+                        self.centralized._dispatch_domains(coalitions)
+                        self.centralized._last_dispatched_assignments = dict(assignments)
 
             print(f"\n[ASSIGN] Step={step}")
             for sid, agents in assignments.items():
@@ -535,6 +543,8 @@ class DACAOrchestrator:
                     if validate_task_completion(agent_list, subtask, fleet, COMPLETION_RADIUS_M):
                         was_completed = subtask.completed
                         self.env.mark_subtask_complete(sid)
+                        if self.continuity_engine is not None:
+                            self.continuity_engine.mark_subtask_completed(sid)
                         if not was_completed and hasattr(self, "experience_store") and self.experience_store is not None and self.experience_store.enabled:
                             from src.memory.experience_store import compute_signature
                             agent_types = [a.agent_type.value for a in fleet.agents]
