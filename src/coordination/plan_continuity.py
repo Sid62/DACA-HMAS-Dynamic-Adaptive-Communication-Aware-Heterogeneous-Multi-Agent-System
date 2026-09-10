@@ -395,7 +395,7 @@ class PlanContinuityEngine:
 
         # 3. Lightweight local reassignment for freed agents to incomplete subtasks
         if freed_agents:
-            for sid, agents in updated_assignments.items():
+            for sid, agents in list(updated_assignments.items()):
                 if not agents:
                     st = next((s for s in incomplete_subtasks if s.subtask_id == sid), None)
                     if st:

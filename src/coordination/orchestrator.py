@@ -783,7 +783,7 @@ class DACAOrchestrator:
                         self.centralized._last_dispatched_assignments = dict(assignments)
 
             print(f"\n[ASSIGN] Step={step}")
-            for sid, agents in assignments.items():
+            for sid, agents in list(assignments.items()):
                 print(f"{sid} -> {agents}")
 
             if self.config.use_distance_decomp:
@@ -805,14 +805,14 @@ class DACAOrchestrator:
 
             targets = {s.subtask_id: s.target for s in self.env.subtask_list}
             agent_assignments = {}
-            for sid, agents in assignments.items():
+            for sid, agents in list(assignments.items()):
                 for aid in agents:
                     agent_assignments[aid] = sid
 
             t_sim_body = time.perf_counter()
             self.ca_transfer.step(self.env.fleet, mode, agent_assignments, targets)
 
-            for sid, agent_list in assignments.items():
+            for sid, agent_list in list(assignments.items()):
                 if not agent_list:
                     continue
                 subtask = next(
@@ -826,6 +826,7 @@ class DACAOrchestrator:
                         self.env.mark_subtask_complete(sid)
                         if self.continuity_engine is not None:
                             self.continuity_engine.mark_subtask_completed(sid)
+                        assignments.pop(sid, None)
                         if not was_completed and hasattr(self, "experience_store") and self.experience_store is not None and self.experience_store.enabled:
                             from src.memory.experience_store import compute_signature
                             agent_types = [a.agent_type.value for a in fleet.agents]

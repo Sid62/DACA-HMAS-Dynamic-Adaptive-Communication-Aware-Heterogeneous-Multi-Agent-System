@@ -212,12 +212,12 @@ class CentralizedHybridCoordinator:
             s.subtask_id: s.target for s in env.subtask_list
         }
         agent_assignments = {}
-        for sid, agents in assignments.items():
+        for sid, agents in list(assignments.items()):
             for aid in agents:
                 agent_assignments[aid] = sid
         self.nmpc.step(env.fleet, agent_assignments, targets)
 
-        for sid, agent_list in assignments.items():
+        for sid, agent_list in list(assignments.items()):
             if not agent_list:
                 continue
             subtask = next((s for s in env.subtask_list if s.subtask_id == sid), None)
@@ -228,3 +228,4 @@ class CentralizedHybridCoordinator:
                     env.mark_subtask_complete(sid)
                     if self.continuity_engine is not None:
                         self.continuity_engine.mark_subtask_completed(sid)
+                    assignments.pop(sid, None)
