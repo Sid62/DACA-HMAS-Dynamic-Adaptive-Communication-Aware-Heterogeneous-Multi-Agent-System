@@ -36,6 +36,7 @@ class CentralizedHybridCoordinator:
     continuity_engine: Any | None = None
     plan_repairer: Any | None = None
     experience_store: Any | None = None
+    run_config: Any | None = None
     nmpc: NMPCController = field(default_factory=NMPCController)
     # Delta dispatch: track last dispatched assignment state to suppress
     # redundant Device LLM dispatch calls when assignments haven't changed.

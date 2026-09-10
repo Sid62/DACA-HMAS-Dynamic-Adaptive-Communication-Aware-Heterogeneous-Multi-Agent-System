@@ -44,6 +44,7 @@ class DecentralizedHybridCoordinator:
     continuity_engine: Any | None = None
     plan_repairer: Any | None = None
     experience_store: Any | None = None
+    run_config: Any | None = None
 
     @property
     def device_llm(self) -> DeviceLLMClient:
@@ -226,7 +227,12 @@ class DecentralizedHybridCoordinator:
         # Optimization 8: Reduce Consensus Overhead when network is stable
         from src.config import get_thresholds
         c_opts = get_thresholds().get("optimizations", {}).get("consensus", {})
-        if c_opts.get("skip_when_stable", True):
+        if self.run_config is not None:
+            skip_enabled = bool(getattr(self.run_config, "use_optimizations", True) and getattr(self.run_config, "consensus_skip", True))
+        else:
+            skip_enabled = bool(c_opts.get("skip_when_stable", True))
+
+        if skip_enabled:
             domain_cqi = (
                 float(np.mean(pm.domain_cqi_matrix))
                 if pm.domain_cqi_matrix is not None

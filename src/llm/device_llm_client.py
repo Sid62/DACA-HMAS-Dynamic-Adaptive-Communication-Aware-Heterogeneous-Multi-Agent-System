@@ -62,6 +62,40 @@ class DeviceLLMUsage:
     device_llm_memory_peak_mb: dict[str, float] = field(default_factory=dict)
     device_llm_heap_delta_mb: dict[str, float] = field(default_factory=dict)
 
+    # Measured provider tokens
+    measured_prompt_tokens: int = 0
+    measured_completion_tokens: int = 0
+    measured_total_tokens: int = 0
+    measured_api_calls: int = 0
+
+    # Estimated tokens
+    estimated_prompt_tokens: int = 0
+    estimated_completion_tokens: int = 0
+    estimated_total_tokens: int = 0
+    estimated_api_calls: int = 0
+
+    def record_measured_tokens(self, prompt_tokens: int, completion_tokens: int, total_tokens: int | None = None) -> None:
+        tot = total_tokens if total_tokens is not None else (prompt_tokens + completion_tokens)
+        self.measured_prompt_tokens += prompt_tokens
+        self.measured_completion_tokens += completion_tokens
+        self.measured_total_tokens += tot
+        self.measured_api_calls += 1
+        self.prompt_tokens += prompt_tokens
+        self.completion_tokens += completion_tokens
+        self.total_tokens += tot
+        self.tokens = self.total_tokens
+
+    def record_estimated_tokens(self, prompt_tokens: int, completion_tokens: int, total_tokens: int | None = None) -> None:
+        tot = total_tokens if total_tokens is not None else (prompt_tokens + completion_tokens)
+        self.estimated_prompt_tokens += prompt_tokens
+        self.estimated_completion_tokens += completion_tokens
+        self.estimated_total_tokens += tot
+        self.estimated_api_calls += 1
+        self.prompt_tokens += prompt_tokens
+        self.completion_tokens += completion_tokens
+        self.total_tokens += tot
+        self.tokens = self.total_tokens
+
     def reset(self) -> None:
         self.tokens = 0
         self.prompt_tokens = 0
@@ -87,6 +121,14 @@ class DeviceLLMUsage:
         self.device_llm_memory_mb = {}
         self.device_llm_memory_peak_mb = {}
         self.device_llm_heap_delta_mb = {}
+        self.measured_prompt_tokens = 0
+        self.measured_completion_tokens = 0
+        self.measured_total_tokens = 0
+        self.measured_api_calls = 0
+        self.estimated_prompt_tokens = 0
+        self.estimated_completion_tokens = 0
+        self.estimated_total_tokens = 0
+        self.estimated_api_calls = 0
 
 
 @dataclass
@@ -104,6 +146,7 @@ class DeviceLLMClient:
     node_id: str = "device_0"
     managed_agent_ids: list[str] = field(default_factory=list)
     node_state: NodeState | None = None
+    run_config: Any | None = None
 
     def __post_init__(self) -> None:
         if not tracemalloc.is_tracing():
@@ -188,10 +231,7 @@ class DeviceLLMClient:
             p_tok = len(prompt.split())
             c_tok = len(response.split())
             t_tok = p_tok + c_tok
-            self.usage.prompt_tokens += p_tok
-            self.usage.completion_tokens += c_tok
-            self.usage.total_tokens += t_tok
-            self.usage.tokens = self.usage.total_tokens
+            self.usage.record_estimated_tokens(p_tok, c_tok, t_tok)
             self.usage.device_inference_calls += 1
             self.usage.device_api_calls += 1
             self.usage.api_calls = self.usage.device_api_calls
@@ -222,28 +262,34 @@ class DeviceLLMClient:
 
             if cache_path:
                 with open(cache_path, "w", encoding="utf-8") as f:
-                    json.dump({"response": response, "tokens": t_tok, "prompt_tokens": p_tok, "completion_tokens": c_tok}, f)
+                    json.dump({"response": response, "tokens": t_tok, "prompt_tokens": p_tok, "completion_tokens": c_tok, "is_measured": False}, f)
             return response
         else:
             before = self.usage.device_api_calls
             provider = self.config.get("device", {}).get("provider", "ollama")
             start = time.perf_counter()
+            is_measured = True
             try:
                 if provider == "vllm":
-                    response, p_tok, c_tok, t_tok = self._vllm_call(prompt)
+                    call_res = self._vllm_call(prompt)
                 else:
-                    response, p_tok, c_tok, t_tok = self._ollama_call(prompt)
+                    call_res = self._ollama_call(prompt)
+                if len(call_res) == 5:
+                    response, p_tok, c_tok, t_tok, is_measured = call_res
+                else:
+                    response, p_tok, c_tok, t_tok = call_res
             except Exception as e:
                 print(f"[DEVICE LLM] {provider} call failed ({e}) -- degrading to mock response")
                 response = self._mock_response(prompt)
                 p_tok = len(prompt.split())
                 c_tok = len(response.split())
                 t_tok = p_tok + c_tok
+                is_measured = False
             elapsed = time.perf_counter() - start
-            self.usage.prompt_tokens += p_tok
-            self.usage.completion_tokens += c_tok
-            self.usage.total_tokens += t_tok
-            self.usage.tokens = self.usage.total_tokens
+            if is_measured:
+                self.usage.record_measured_tokens(p_tok, c_tok, t_tok)
+            else:
+                self.usage.record_estimated_tokens(p_tok, c_tok, t_tok)
             self.usage.device_inference_calls += 1
             self.usage.device_api_calls += 1
             self.usage.api_calls = self.usage.device_api_calls
@@ -275,10 +321,10 @@ class DeviceLLMClient:
             print(f"[DEVICE_COMPLETE] timestamp={time.time():.4f} step={step} caller={caller} domain={self.node_id} coalition_id={coalition_id} cache=MISS latency={elapsed:.4f}s")
             if cache_path:
                 with open(cache_path, "w", encoding="utf-8") as f:
-                    json.dump({"response": response, "tokens": t_tok, "prompt_tokens": p_tok, "completion_tokens": c_tok}, f)
+                    json.dump({"response": response, "tokens": t_tok, "prompt_tokens": p_tok, "completion_tokens": c_tok, "is_measured": is_measured}, f)
             return response
 
-    def _ollama_call(self, prompt: str) -> tuple[str, int, int, int]:
+    def _ollama_call(self, prompt: str) -> tuple[str, int, int, int, bool]:
         device = self.config["device"]
         base_url = device.get("base_url", "http://localhost:11434")
         model = device.get("model", "llama3.1:8b")
@@ -308,6 +354,7 @@ class DeviceLLMClient:
             resp.raise_for_status()
             data = resp.json()
             text = data.get("response", "")
+            has_eval = bool("prompt_eval_count" in data or "eval_count" in data)
             p_tok = data.get("prompt_eval_count", len(prompt.split()))
             c_tok = data.get("eval_count", len(text.split()))
             t_tok = p_tok + c_tok
@@ -319,9 +366,9 @@ class DeviceLLMClient:
               f"eval_duration_ns={data.get('eval_duration')} "
               f"prompt_eval_duration_ns={data.get('prompt_eval_duration')} "
               f"load_duration_ns={data.get('load_duration')}")
-        return text, p_tok, c_tok, t_tok
+        return text, p_tok, c_tok, t_tok, has_eval
 
-    def _vllm_call(self, prompt: str) -> tuple[str, int, int, int]:
+    def _vllm_call(self, prompt: str) -> tuple[str, int, int, int, bool]:
         """OpenAI-compatible vLLM server endpoint."""
         device = self.config["device"]
         base_url = device.get("base_url", "http://localhost:8000/v1")
@@ -340,10 +387,11 @@ class DeviceLLMClient:
             data = resp.json()
             text = data["choices"][0]["message"]["content"]
             usage = data.get("usage", {})
+            has_usage = bool(usage and "prompt_tokens" in usage)
             p_tok = usage.get("prompt_tokens", len(prompt.split()))
             c_tok = usage.get("completion_tokens", len(text.split()))
             t_tok = usage.get("total_tokens", p_tok + c_tok)
-            return text, p_tok, c_tok, t_tok
+            return text, p_tok, c_tok, t_tok, has_usage
 
     def _agent_id(self, agent: dict) -> str:
         return str(agent.get("id", agent.get("agent_id", "")))
@@ -832,6 +880,14 @@ def aggregate_device_usage(device_llms: dict[str, DeviceLLMClient]) -> DeviceLLM
         total.cache_hits += client.usage.cache_hits
         total.llm_wait_s += client.usage.llm_wait_s
         total.device_inference_time_s += client.usage.device_inference_time_s
+        total.measured_prompt_tokens += client.usage.measured_prompt_tokens
+        total.measured_completion_tokens += client.usage.measured_completion_tokens
+        total.measured_total_tokens += client.usage.measured_total_tokens
+        total.measured_api_calls += client.usage.measured_api_calls
+        total.estimated_prompt_tokens += client.usage.estimated_prompt_tokens
+        total.estimated_completion_tokens += client.usage.estimated_completion_tokens
+        total.estimated_total_tokens += client.usage.estimated_total_tokens
+        total.estimated_api_calls += client.usage.estimated_api_calls
     non_zero_readings = [c.usage.memory_mb for c in device_llms.values() if c.usage.memory_mb > 0]
     total.memory_mb = max(non_zero_readings) if non_zero_readings else 0.0
 

@@ -37,6 +37,88 @@ from src.coordination.replan_trigger import PlanState, should_replan, update_pla
 
 
 @dataclass
+class RunConfig:
+    """Unified run-level experiment configuration passed to all components."""
+    name: str = "A5"
+    use_optimizations: bool = True
+
+    # Granular optimization switches
+    semantic_cache: bool = True
+    prompt_compression: bool = True
+    summarization: bool = True
+    constrained_output: bool = True
+    max_completion_tokens: int = 256
+    experience_reuse: bool = True
+    plan_continuity: bool = True
+    delta_transfer: bool = True
+    consensus_skip: bool = True
+    cache_responses: bool = True
+
+    # Algorithmic and coordination switches
+    use_distance_decomp: bool = True
+    use_coalition_feasibility: bool = True
+    use_cqm: bool = True
+    use_acds: bool = True
+    use_handoff: bool = True
+    use_reallocation: bool = True
+    use_hysteresis: bool = True
+    static_mode: int | None = None
+
+    # Routing and model options
+    use_mock: bool = True
+    cloud_provider: str = "groq"
+    cloud_model: str = "llama-3.3-70b-versatile"
+    device_provider: str = "vllm"
+    device_model: str = "Qwen/Qwen2.5-3B-Instruct"
+
+    # Context metadata
+    scenario: str = ""
+    network_profile: str = ""
+    seed: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "use_optimizations": self.use_optimizations,
+            "optimizations": {
+                "use_optimizations": self.use_optimizations,
+                "semantic_cache": self.semantic_cache,
+                "prompt_compression": self.prompt_compression,
+                "summarization": self.summarization,
+                "constrained_output": self.constrained_output,
+                "max_completion_tokens": self.max_completion_tokens,
+                "experience_reuse": self.experience_reuse,
+                "plan_continuity": self.plan_continuity,
+                "delta_transfer": self.delta_transfer,
+                "consensus_skip": self.consensus_skip,
+                "cache_responses": self.cache_responses,
+            },
+            "routing": {
+                "use_mock": self.use_mock,
+                "cloud_provider": self.cloud_provider,
+                "cloud_model": self.cloud_model,
+                "device_provider": self.device_provider,
+                "device_model": self.device_model,
+            },
+            "algorithm": {
+                "use_distance_decomp": self.use_distance_decomp,
+                "use_coalition_feasibility": self.use_coalition_feasibility,
+                "use_cqm": self.use_cqm,
+                "use_acds": self.use_acds,
+                "use_handoff": self.use_handoff,
+                "use_reallocation": self.use_reallocation,
+                "use_hysteresis": self.use_hysteresis,
+                "static_mode": self.static_mode,
+            },
+            "context": {
+                "scenario": self.scenario,
+                "network_profile": self.network_profile,
+                "seed": self.seed,
+            },
+        }
+
+
+@dataclass
 class DACAConfig:
     """Experiment configuration flags."""
     name: str = "A5"
@@ -49,6 +131,108 @@ class DACAConfig:
     use_hysteresis: bool = True
     static_mode: int | None = None
     use_optimizations: bool = True
+
+    # Granular optimization overrides (None = derive from use_optimizations)
+    semantic_cache: bool | None = None
+    prompt_compression: bool | None = None
+    summarization: bool | None = None
+    constrained_output: bool | None = None
+    max_completion_tokens: int | None = None
+    experience_reuse: bool | None = None
+    plan_continuity: bool | None = None
+    delta_transfer: bool | None = None
+    consensus_skip: bool | None = None
+    cache_responses: bool | None = None
+
+    # Routing overrides
+    use_mock: bool | None = None
+    cloud_provider: str | None = None
+    cloud_model: str | None = None
+    device_provider: str | None = None
+    device_model: str | None = None
+
+    def to_run_config(
+        self,
+        llm_cfg: dict[str, Any] | None = None,
+        thresholds: dict[str, Any] | None = None,
+        scenario: str = "",
+        network_profile: str = "",
+        seed: int = 0,
+    ) -> RunConfig:
+        llm_cfg = llm_cfg or {}
+        thresholds = thresholds or {}
+        cloud_cfg = llm_cfg.get("cloud", {})
+        dev_cfg = llm_cfg.get("device", {})
+        th_opts = thresholds.get("optimizations", {})
+
+        opt_master = self.use_optimizations
+
+        def _resolve_opt(override_val: bool | None, yaml_key: str, default: bool = True) -> bool:
+            if not opt_master:
+                return False
+            if override_val is not None:
+                return bool(override_val)
+            yaml_sec = th_opts.get(yaml_key, {})
+            if isinstance(yaml_sec, dict):
+                return bool(yaml_sec.get("enabled", default))
+            return default
+
+        sem_cache = _resolve_opt(self.semantic_cache, "semantic_cache", True)
+        prompt_comp = _resolve_opt(self.prompt_compression, "prompt_compression", True)
+        summ = _resolve_opt(self.summarization, "summarization", True)
+        const_out = _resolve_opt(self.constrained_output, "constrained_output", True)
+
+        c_skip = (
+            False if not opt_master
+            else (self.consensus_skip if self.consensus_skip is not None
+                  else bool(th_opts.get("consensus", {}).get("skip_when_stable", True)))
+        )
+        exp_reuse = (
+            False if not opt_master
+            else (self.experience_reuse if self.experience_reuse is not None
+                  else bool(llm_cfg.get("experience_reuse", {}).get("enabled", True)))
+        )
+        plan_cont = False if not opt_master else (self.plan_continuity if self.plan_continuity is not None else True)
+        delta_trans = False if not opt_master else (self.delta_transfer if self.delta_transfer is not None else True)
+        disk_cache = False if not opt_master else (self.cache_responses if self.cache_responses is not None else bool(llm_cfg.get("cache_responses", True)))
+
+        mock_flag = self.use_mock if self.use_mock is not None else bool(llm_cfg.get("use_mock", True))
+        c_prov = self.cloud_provider or cloud_cfg.get("provider", "groq")
+        c_mod = self.cloud_model or cloud_cfg.get("model", "llama-3.3-70b-versatile")
+        d_prov = self.device_provider or dev_cfg.get("provider", "vllm")
+        d_mod = self.device_model or dev_cfg.get("model", "Qwen/Qwen2.5-3B-Instruct")
+        max_tokens = self.max_completion_tokens or th_opts.get("constrained_output", {}).get("max_completion_tokens", 256)
+
+        return RunConfig(
+            name=self.name,
+            use_optimizations=opt_master,
+            semantic_cache=sem_cache,
+            prompt_compression=prompt_comp,
+            summarization=summ,
+            constrained_output=const_out,
+            max_completion_tokens=int(max_tokens),
+            experience_reuse=exp_reuse,
+            plan_continuity=plan_cont,
+            delta_transfer=delta_trans,
+            consensus_skip=c_skip,
+            cache_responses=disk_cache,
+            use_distance_decomp=self.use_distance_decomp,
+            use_coalition_feasibility=self.use_coalition_feasibility,
+            use_cqm=self.use_cqm,
+            use_acds=self.use_acds,
+            use_handoff=self.use_handoff,
+            use_reallocation=self.use_reallocation,
+            use_hysteresis=self.use_hysteresis,
+            static_mode=self.static_mode,
+            use_mock=mock_flag,
+            cloud_provider=c_prov,
+            cloud_model=c_mod,
+            device_provider=d_prov,
+            device_model=d_mod,
+            scenario=scenario,
+            network_profile=network_profile,
+            seed=seed,
+        )
 
 
 CONFIGS: dict[str, DACAConfig] = {
@@ -100,7 +284,26 @@ class DACAOrchestrator:
             self.scenario, self.thresholds, self.network_profile, self.seed, self.max_steps
         )
         llm_cfg = get_llm_config()
-        self.cloud_llm = CloudLLMClient(llm_cfg)
+
+        # Build one unified run configuration instance for the experiment
+        if hasattr(self.config, "to_run_config"):
+            self.run_config = self.config.to_run_config(
+                llm_cfg=llm_cfg,
+                thresholds=self.thresholds,
+                scenario=self.scenario,
+                network_profile=self.network_profile,
+                seed=self.seed,
+            )
+        else:
+            self.run_config = RunConfig(
+                name=getattr(self.config, "name", "A5"),
+                use_optimizations=getattr(self.config, "use_optimizations", True),
+                scenario=self.scenario,
+                network_profile=self.network_profile,
+                seed=self.seed,
+            )
+
+        self.cloud_llm = CloudLLMClient(llm_cfg, run_config=self.run_config)
         self.cloud_llm.configure_experiment_context(
             scenario=self.scenario,
             architecture=self.config.name,
@@ -111,6 +314,9 @@ class DACAOrchestrator:
         self.device_llms: dict[str, DeviceLLMClient] = _build_device_llms_by_type(
             self.env.fleet, llm_cfg
         )
+        for d_client in self.device_llms.values():
+            d_client.run_config = self.run_config
+
         self.cloud_llm.device_fallback_decompose = self._device_fallback_decompose
         self.cloud_llm.device_fallback_coalitions = self._device_fallback_coalitions
         self.peer_manager = PeerCommunicationManager(rng=np.random.default_rng(self.seed))
@@ -145,37 +351,55 @@ class DACAOrchestrator:
             gamma_min=self.thresholds.get("gamma_min", 0.3),
         )
 
-        if self.config.use_optimizations:
+        # Optimization components wired strictly per unified RunConfig
+        if self.run_config.use_optimizations and self.run_config.plan_continuity:
             self.continuity_engine = PlanContinuityEngine(
                 validity_threshold=self.thresholds.get("plan_validity_threshold", 0.75),
                 r_reach=self.thresholds.get("R_reach", 100.0),
                 c_task=self.thresholds.get("C_task", 30.0),
             )
+        else:
+            self.continuity_engine = None
+
+        if self.run_config.use_optimizations and self.run_config.delta_transfer:
             self.delta_transfer_manager = DeltaStateTransferManager()
         else:
-            self.cloud_llm.config["cache_responses"] = False
-            for d_client in self.device_llms.values():
-                d_client.config["cache_responses"] = False
-            self.continuity_engine = None
             self.delta_transfer_manager = None
 
-
+        # Experience store wired strictly per unified RunConfig
         from src.memory.experience_store import SubtaskExperienceStore
         exp_cfg = llm_cfg.get("experience_reuse", {})
         self.experience_store = SubtaskExperienceStore(
             store_path=exp_cfg.get("store_path", "experience_store.json"),
-            enabled=exp_cfg.get("enabled", False),
+            enabled=bool(self.run_config.use_optimizations and self.run_config.experience_reuse),
         )
+        self.experience_store.run_config = self.run_config
+
+        # If optimizations are disabled (e.g. A5_unopt), explicitly guarantee all switches are OFF
+        if not self.run_config.use_optimizations:
+            if hasattr(self.cloud_llm, "summarizer") and self.cloud_llm.summarizer:
+                self.cloud_llm.summarizer.enabled = False
+            self.cloud_llm.opt_prompt_compression = False
+            self.cloud_llm.opt_constrained_output = False
+            if hasattr(self.cloud_llm, "semantic_cache") and self.cloud_llm.semantic_cache:
+                self.cloud_llm.semantic_cache.enabled = False
+            self.cloud_llm.config["cache_responses"] = False
+            for d_client in self.device_llms.values():
+                d_client.config["cache_responses"] = False
+            self.experience_store.enabled = False
+            self.continuity_engine = None
+            self.delta_transfer_manager = None
 
         self.centralized = CentralizedHybridCoordinator(
             cloud_llm=self.cloud_llm,
             device_llms=self.device_llms,
             decomposer=self.decomposer,
             coalition_formation=self.coalition_formation,
-            use_distance_decomp=self.config.use_distance_decomp,
-            use_coalition_feasibility=self.config.use_coalition_feasibility,
+            use_distance_decomp=self.run_config.use_distance_decomp,
+            use_coalition_feasibility=self.run_config.use_coalition_feasibility,
             continuity_engine=self.continuity_engine,
             experience_store=self.experience_store,
+            run_config=self.run_config,
         )
         self.decentralized = DecentralizedHybridCoordinator(
             cloud_llm=self.cloud_llm,
@@ -183,10 +407,11 @@ class DACAOrchestrator:
             peer_manager=self.peer_manager,
             decomposer=self.device_decomposer,
             coalition_formation=self.device_coalition_formation,
-            use_distance_decomp=self.config.use_distance_decomp,
-            use_coalition_feasibility=self.config.use_coalition_feasibility,
+            use_distance_decomp=self.run_config.use_distance_decomp,
+            use_coalition_feasibility=self.run_config.use_coalition_feasibility,
             continuity_engine=self.continuity_engine,
             experience_store=self.experience_store,
+            run_config=self.run_config,
         )
         self.ca_transfer = CATransferManager(
             overlap_delta=self.thresholds.get("ca_overlap_delta", 3)
@@ -196,9 +421,16 @@ class DACAOrchestrator:
             coalition_formation=self.device_coalition_formation,
             peer_manager=self.peer_manager,
         )
+        self.decomposer.run_config = self.run_config
+        self.coalition_formation.run_config = self.run_config
+        self.device_decomposer.run_config = self.run_config
+        self.device_coalition_formation.run_config = self.run_config
+        self.reallocator.run_config = self.run_config
+
         self.metrics = MetricsCollector()
-        self.comm_counter = CommunicationStepCounter()
+        self.comm_counter = CommunicationStepCounter(run_config=self.run_config)
         self._plan_state = PlanState()
+        self.metadata: dict[str, Any] = {}
 
     @property
     def device_llm(self) -> DeviceLLMClient:
@@ -230,6 +462,44 @@ class DACAOrchestrator:
         qmat = cqi_matrix if cqi_matrix is not None else [[1.0] * len(agents)] * len(agents)
         return client.reallocate_remaining(subtasks, agents, dmat, qmat, scope_to_managed=False)
 
+    def get_experiment_metadata(self) -> dict[str, Any]:
+        """Return the run configuration and experiment metadata."""
+        sem_cache = getattr(self.cloud_llm, "semantic_cache", None)
+        sem_entries = len(sem_cache.entries) if sem_cache is not None and hasattr(sem_cache, "entries") else 0
+        exp_entries = (
+            sum(len(v) for v in self.experience_store._entries.values())
+            if getattr(self, "experience_store", None) is not None and hasattr(self.experience_store, "_entries")
+            else 0
+        )
+        cache_start = {
+            "semantic_cache_entries": sem_entries,
+            "semantic_cache_enabled": bool(sem_cache is not None and getattr(sem_cache, "enabled", False)),
+            "disk_cache_enabled": bool(self.cloud_llm.config.get("cache_responses", False)),
+            "experience_store_entries": exp_entries,
+            "experience_store_enabled": bool(
+                getattr(self, "experience_store", None) is not None
+                and getattr(self.experience_store, "enabled", False)
+            ),
+        }
+        actual_mock = bool(self.cloud_llm.config.get("use_mock", self.run_config.use_mock))
+        self.run_config.use_mock = actual_mock
+        return {
+            "seed": self.seed,
+            "provider": self.run_config.cloud_provider,
+            "model": self.run_config.cloud_model,
+            "mock": actual_mock,
+            "use_mock": actual_mock,
+            "cloud_provider": self.run_config.cloud_provider,
+            "cloud_model": self.run_config.cloud_model,
+            "device_provider": self.run_config.device_provider,
+            "device_model": self.run_config.device_model,
+            "optimizations": self.run_config.to_dict()["optimizations"],
+            "cache_start_state": cache_start,
+            "scenario": self.scenario,
+            "network_profile": self.network_profile,
+            "config_name": self.config.name,
+        }
+
     def run(self) -> ExperimentMetrics:
         import inspect
         import psutil
@@ -238,6 +508,7 @@ class DACAOrchestrator:
         baseline_rss = proc.memory_info().rss / (1024 * 1024)
         print("========== RUN STARTED ==========")
         print(inspect.getfile(self.__class__))
+        self.metadata = self.get_experiment_metadata()
         start = time.perf_counter()
         self.env.reset()
         self.comm_counter.reset()
@@ -399,7 +670,7 @@ class DACAOrchestrator:
                 t_transfer_end = time.perf_counter()
                 coalition_transfer_time_s += (t_transfer_end - t_transfer_start)
 
-                self.comm_counter.increment("handoff_reallocation", 1, "mode_handoff_snapshot_transfer")
+                self.comm_counter.record_handoff_reallocation(1, "mode_handoff_snapshot_transfer")
 
                 state_handoff_time_s += (
                     (t_snap1_end - t_snap1_start)
@@ -430,7 +701,7 @@ class DACAOrchestrator:
                     realloc_dur = t_realloc_end - t_realloc_start
                     coalition_computation_time_s += realloc_dur
                     reallocation_time_s += realloc_dur
-                    self.comm_counter.increment("handoff_reallocation", 1, "post_switch_coalition_reallocation")
+                    self.comm_counter.record_handoff_reallocation(1, "post_switch_coalition_reallocation")
             if mode != prev_mode:
                 prev_mode = mode
 
@@ -463,17 +734,17 @@ class DACAOrchestrator:
                 if mode == 0:
                     assignments, coalitions, cloud_reasoned, dispatch_occurred = self.centralized.plan(self.env, cqi_matrix)
                     if cloud_reasoned:
-                        self.comm_counter.increment("global_planning", 1, "centralized_global_planning")
+                        self.comm_counter.record_global_planning(1, "centralized_global_planning")
                     if dispatch_occurred:
-                        self.comm_counter.increment("dispatch", 1, "centralized_domain_dispatch")
+                        self.comm_counter.record_dispatch(1, "centralized_domain_dispatch")
                     print(">>>> USING CENTRALIZED")
                 else:
                     print("\nEntering decentralized planner\n")
                     assignments, coalitions, cloud_reasoned = self.decentralized.plan(self.env, cqi_matrix)
                     if cloud_reasoned:
-                        self.comm_counter.increment("local_coordination", 1, "decentralized_leader_planning")
-                        self.comm_counter.increment("peer_consensus", 1, "decentralized_peer_review_consensus")
-                        self.comm_counter.increment("feedback_sync", 1, "decentralized_state_sync")
+                        self.comm_counter.record_local_coordination(1, "decentralized_leader_planning")
+                        self.comm_counter.record_peer_consensus(1, "decentralized_peer_review_consensus")
+                        self.comm_counter.record_feedback_sync(1, "decentralized_state_sync")
                     print(">>>> USING DECENTRALIZED")
                 plan_lat = time.perf_counter() - t_plan
                 planning_time_s += plan_lat
@@ -654,6 +925,19 @@ class DACAOrchestrator:
             experience_reuse_attempts=self.experience_store.reuse_attempts if hasattr(self, "experience_store") and self.experience_store else 0,
             experience_reuse_hits=self.experience_store.reuse_hits if hasattr(self, "experience_store") and self.experience_store else 0,
             dispatch_skipped_rounds=self.centralized.dispatch_skipped_count,
+            metadata=self.metadata,
+            measured_cloud_prompt_tokens=self.cloud_llm.usage.measured_prompt_tokens,
+            measured_cloud_completion_tokens=self.cloud_llm.usage.measured_completion_tokens,
+            measured_cloud_total_tokens=self.cloud_llm.usage.measured_total_tokens,
+            estimated_cloud_prompt_tokens=self.cloud_llm.usage.estimated_prompt_tokens,
+            estimated_cloud_completion_tokens=self.cloud_llm.usage.estimated_completion_tokens,
+            estimated_cloud_total_tokens=self.cloud_llm.usage.estimated_total_tokens,
+            measured_device_prompt_tokens=device_usage.measured_prompt_tokens,
+            measured_device_completion_tokens=device_usage.measured_completion_tokens,
+            measured_device_total_tokens=device_usage.measured_total_tokens,
+            estimated_device_prompt_tokens=device_usage.estimated_prompt_tokens,
+            estimated_device_completion_tokens=device_usage.estimated_completion_tokens,
+            estimated_device_total_tokens=device_usage.estimated_total_tokens,
             # Upgraded fine-grained metrics
             cloud_prompt_tokens=self.cloud_llm.usage.prompt_tokens,
             cloud_completion_tokens=self.cloud_llm.usage.completion_tokens,

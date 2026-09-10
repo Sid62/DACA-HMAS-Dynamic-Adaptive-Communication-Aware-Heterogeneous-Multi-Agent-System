@@ -52,6 +52,21 @@ class ExperimentMetrics:
     cloud_retry_tokens: int = 0
     device_retry_tokens: int = 0
 
+    # Measured vs estimated tokens (R5 / Issue 5)
+    measured_cloud_prompt_tokens: int = 0
+    measured_cloud_completion_tokens: int = 0
+    measured_cloud_total_tokens: int = 0
+    estimated_cloud_prompt_tokens: int = 0
+    estimated_cloud_completion_tokens: int = 0
+    estimated_cloud_total_tokens: int = 0
+
+    measured_device_prompt_tokens: int = 0
+    measured_device_completion_tokens: int = 0
+    measured_device_total_tokens: int = 0
+    estimated_device_prompt_tokens: int = 0
+    estimated_device_completion_tokens: int = 0
+    estimated_device_total_tokens: int = 0
+
     # Upgraded API call instrumentation
     successful_calls: int = 0
     failed_calls: int = 0
@@ -142,6 +157,9 @@ class ExperimentMetrics:
     consensus_duration: float = 0.0
     planner_latency: float = 0.0
 
+    # Experiment run metadata (R3 / Issue 5)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
     def to_dict(self) -> dict[str, Any]:
         sem_hits = self.semantic_cache_hits
         tot_cache = sem_hits + self.cache_misses
@@ -164,6 +182,19 @@ class ExperimentMetrics:
             "total_completion_tokens": self.total_completion_tokens,
             "cloud_retry_tokens": self.cloud_retry_tokens,
             "device_retry_tokens": self.device_retry_tokens,
+            "measured_cloud_prompt_tokens": self.measured_cloud_prompt_tokens,
+            "measured_cloud_completion_tokens": self.measured_cloud_completion_tokens,
+            "measured_cloud_total_tokens": self.measured_cloud_total_tokens,
+            "estimated_cloud_prompt_tokens": self.estimated_cloud_prompt_tokens,
+            "estimated_cloud_completion_tokens": self.estimated_cloud_completion_tokens,
+            "estimated_cloud_total_tokens": self.estimated_cloud_total_tokens,
+            "measured_device_prompt_tokens": self.measured_device_prompt_tokens,
+            "measured_device_completion_tokens": self.measured_device_completion_tokens,
+            "measured_device_total_tokens": self.measured_device_total_tokens,
+            "estimated_device_prompt_tokens": self.estimated_device_prompt_tokens,
+            "estimated_device_completion_tokens": self.estimated_device_completion_tokens,
+            "estimated_device_total_tokens": self.estimated_device_total_tokens,
+            "metadata": dict(self.metadata),
             "api_calls": self.total_api_calls,
             "cloud_planning_calls": self.cloud_api_calls,
             "device_planning_calls": self.device_api_calls,
@@ -388,6 +419,19 @@ class MetricsCollector:
         consensus_skipped: int = 0,
         consensus_duration: float = 0.0,
         planner_latency: float = 0.0,
+        measured_cloud_prompt_tokens: int = 0,
+        measured_cloud_completion_tokens: int = 0,
+        measured_cloud_total_tokens: int = 0,
+        estimated_cloud_prompt_tokens: int = 0,
+        estimated_cloud_completion_tokens: int = 0,
+        estimated_cloud_total_tokens: int = 0,
+        measured_device_prompt_tokens: int = 0,
+        measured_device_completion_tokens: int = 0,
+        measured_device_total_tokens: int = 0,
+        estimated_device_prompt_tokens: int = 0,
+        estimated_device_completion_tokens: int = 0,
+        estimated_device_total_tokens: int = 0,
+        metadata: dict[str, Any] | None = None,
     ) -> ExperimentMetrics:
         breakdown_dict = dict(communication_step_breakdown or {})
         paper_comm_steps = (
@@ -449,6 +493,18 @@ class MetricsCollector:
             total_completion_tokens=cloud_completion_tokens + device_completion_tokens,
             cloud_retry_tokens=cloud_retry_tokens,
             device_retry_tokens=device_retry_tokens,
+            measured_cloud_prompt_tokens=measured_cloud_prompt_tokens,
+            measured_cloud_completion_tokens=measured_cloud_completion_tokens,
+            measured_cloud_total_tokens=measured_cloud_total_tokens,
+            estimated_cloud_prompt_tokens=estimated_cloud_prompt_tokens,
+            estimated_cloud_completion_tokens=estimated_cloud_completion_tokens,
+            estimated_cloud_total_tokens=estimated_cloud_total_tokens,
+            measured_device_prompt_tokens=measured_device_prompt_tokens,
+            measured_device_completion_tokens=measured_device_completion_tokens,
+            measured_device_total_tokens=measured_device_total_tokens,
+            estimated_device_prompt_tokens=estimated_device_prompt_tokens,
+            estimated_device_completion_tokens=estimated_device_completion_tokens,
+            estimated_device_total_tokens=estimated_device_total_tokens,
             successful_calls=successful_calls,
             failed_calls=failed_calls,
             retried_calls=retried_calls,
@@ -515,6 +571,7 @@ class MetricsCollector:
             consensus_skipped=consensus_skipped,
             consensus_duration=consensus_duration,
             planner_latency=planner_latency if planner_latency > 0.0 else avg_planning_latency,
+            metadata=dict(metadata or {}),
         )
         self.records.append(m)
         return m

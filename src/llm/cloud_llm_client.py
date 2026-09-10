@@ -37,6 +37,18 @@ class LLMUsage:
     llm_wait_s: float = 0.0
     cloud_inference_time_s: float = 0.0
 
+    # Measured provider tokens (reported directly by provider API usage)
+    measured_prompt_tokens: int = 0
+    measured_completion_tokens: int = 0
+    measured_total_tokens: int = 0
+    measured_api_calls: int = 0
+
+    # Estimated tokens (mock, fallback, or character/word heuristics)
+    estimated_prompt_tokens: int = 0
+    estimated_completion_tokens: int = 0
+    estimated_total_tokens: int = 0
+    estimated_api_calls: int = 0
+
     # Explicit R8 Counters
     cloud_network_calls: int = 0
     cloud_disk_cache_hits: int = 0
@@ -57,6 +69,30 @@ class LLMUsage:
     plan_continuity_reuse: int = 0
     device_local_reallocation: int = 0
 
+    def record_measured_tokens(self, prompt_tokens: int, completion_tokens: int, total_tokens: int | None = None) -> None:
+        tot = total_tokens if total_tokens is not None else (prompt_tokens + completion_tokens)
+        self.measured_prompt_tokens += prompt_tokens
+        self.measured_completion_tokens += completion_tokens
+        self.measured_total_tokens += tot
+        self.measured_api_calls += 1
+        # Maintain backward-compatible aggregates
+        self.prompt_tokens += prompt_tokens
+        self.completion_tokens += completion_tokens
+        self.total_tokens += tot
+        self.tokens = self.total_tokens
+
+    def record_estimated_tokens(self, prompt_tokens: int, completion_tokens: int, total_tokens: int | None = None) -> None:
+        tot = total_tokens if total_tokens is not None else (prompt_tokens + completion_tokens)
+        self.estimated_prompt_tokens += prompt_tokens
+        self.estimated_completion_tokens += completion_tokens
+        self.estimated_total_tokens += tot
+        self.estimated_api_calls += 1
+        # Maintain backward-compatible aggregates
+        self.prompt_tokens += prompt_tokens
+        self.completion_tokens += completion_tokens
+        self.total_tokens += tot
+        self.tokens = self.total_tokens
+
     def reset(self) -> None:
         self.tokens = 0
         self.prompt_tokens = 0
@@ -73,6 +109,14 @@ class LLMUsage:
         self.cloud_bytes = 0
         self.llm_wait_s = 0.0
         self.cloud_inference_time_s = 0.0
+        self.measured_prompt_tokens = 0
+        self.measured_completion_tokens = 0
+        self.measured_total_tokens = 0
+        self.measured_api_calls = 0
+        self.estimated_prompt_tokens = 0
+        self.estimated_completion_tokens = 0
+        self.estimated_total_tokens = 0
+        self.estimated_api_calls = 0
         self.cloud_network_calls = 0
         self.cloud_disk_cache_hits = 0
         self.cloud_failed_attempts = 0
@@ -170,32 +214,79 @@ class CloudLLMClient:
     prompt_reduction_percent: float = field(default=0.0, init=False, repr=False)
     opt_prompt_compression: bool = field(default=True, init=False, repr=False)
     opt_constrained_output: bool = field(default=True, init=False, repr=False)
-    max_completion_tokens: int = field(default=256, init=False, repr=False)
+    run_config: Any | None = None
 
     def __post_init__(self) -> None:
         from src.config import get_thresholds
         from src.llm.state_summarizer import CompactStateSummarizer
         from src.llm.semantic_cache import SemanticPlanCache
 
-        th = get_thresholds()
-        opts = th.get("optimizations", {})
+        if self.run_config is not None:
+            self.apply_run_config(self.run_config)
+        else:
+            th = get_thresholds()
+            opts = th.get("optimizations", {})
 
-        sum_cfg = opts.get("summarization", {})
-        self.summarizer = CompactStateSummarizer(enabled=sum_cfg.get("enabled", True))
+            sum_cfg = opts.get("summarization", {})
+            self.summarizer = CompactStateSummarizer(enabled=sum_cfg.get("enabled", True))
 
-        cache_cfg = opts.get("semantic_cache", {})
-        self.semantic_cache = SemanticPlanCache(
-            enabled=cache_cfg.get("enabled", True),
-            similarity_threshold=float(cache_cfg.get("similarity_threshold", 0.90)),
-            max_cache_age=int(cache_cfg.get("max_cache_age", 15)),
-        )
+            cache_cfg = opts.get("semantic_cache", {})
+            self.semantic_cache = SemanticPlanCache(
+                enabled=cache_cfg.get("enabled", True),
+                similarity_threshold=float(cache_cfg.get("similarity_threshold", 0.90)),
+                max_cache_age=int(cache_cfg.get("max_cache_age", 15)),
+            )
 
-        p_cfg = opts.get("prompt_compression", {})
-        self.opt_prompt_compression = p_cfg.get("enabled", True)
+            p_cfg = opts.get("prompt_compression", {})
+            self.opt_prompt_compression = p_cfg.get("enabled", True)
 
-        c_cfg = opts.get("constrained_output", {})
-        self.opt_constrained_output = c_cfg.get("enabled", True)
-        self.max_completion_tokens = int(c_cfg.get("max_completion_tokens", 256))
+            c_cfg = opts.get("constrained_output", {})
+            self.opt_constrained_output = c_cfg.get("enabled", True)
+            self.max_completion_tokens = int(c_cfg.get("max_completion_tokens", 256))
+
+    def apply_run_config(self, run_config: Any) -> None:
+        """Apply unified run configuration directly, overriding global defaults."""
+        from src.config import get_thresholds
+        from src.llm.state_summarizer import CompactStateSummarizer
+        from src.llm.semantic_cache import SemanticPlanCache
+
+        self.run_config = run_config
+        opt_master = bool(getattr(run_config, "use_optimizations", True))
+
+        sum_enabled = opt_master and bool(getattr(run_config, "summarization", True))
+        cache_enabled = opt_master and bool(getattr(run_config, "semantic_cache", True))
+        prompt_comp = opt_master and bool(getattr(run_config, "prompt_compression", True))
+        const_out = opt_master and bool(getattr(run_config, "constrained_output", True))
+        max_tokens = int(getattr(run_config, "max_completion_tokens", 256))
+        disk_cache = opt_master and bool(getattr(run_config, "cache_responses", True))
+
+        self.config["cache_responses"] = disk_cache
+        if hasattr(run_config, "use_mock") and run_config.use_mock is not None:
+            self.config["use_mock"] = run_config.use_mock
+        if hasattr(run_config, "cloud_provider") and run_config.cloud_provider:
+            self.config.setdefault("cloud", {})["provider"] = run_config.cloud_provider
+        if hasattr(run_config, "cloud_model") and run_config.cloud_model:
+            self.config.setdefault("cloud", {})["model"] = run_config.cloud_model
+
+        if self.summarizer is not None:
+            self.summarizer.enabled = sum_enabled
+        else:
+            self.summarizer = CompactStateSummarizer(enabled=sum_enabled)
+
+        if self.semantic_cache is not None:
+            self.semantic_cache.enabled = cache_enabled
+        else:
+            th = get_thresholds()
+            cache_cfg = th.get("optimizations", {}).get("semantic_cache", {})
+            self.semantic_cache = SemanticPlanCache(
+                enabled=cache_enabled,
+                similarity_threshold=float(cache_cfg.get("similarity_threshold", 0.90)),
+                max_cache_age=int(cache_cfg.get("max_cache_age", 15)),
+            )
+
+        self.opt_prompt_compression = prompt_comp
+        self.opt_constrained_output = const_out
+        self.max_completion_tokens = max_tokens
 
     def configure_experiment_context(
         self,
@@ -311,10 +402,7 @@ class CloudLLMClient:
             p_tok = len(prompt.split())
             c_tok = len(response.split())
             t_tok = p_tok + c_tok
-            self.usage.prompt_tokens += p_tok
-            self.usage.completion_tokens += c_tok
-            self.usage.total_tokens += t_tok
-            self.usage.tokens = self.usage.total_tokens
+            self.usage.record_estimated_tokens(p_tok, c_tok, t_tok)
             self.usage.cloud_network_calls += 1
             self.usage.cloud_api_calls += 1
             self.usage.api_calls = self.usage.cloud_api_calls
@@ -329,18 +417,23 @@ class CloudLLMClient:
             print(f"[COUNTER] metric=cloud_planning_calls step={step} before={before} after={after} reason={caller or 'cloud_complete'} caller=CloudLLMClient.complete()")
             print(f"[CLOUD_COMPLETE] timestamp={time.time():.4f} step={step} caller={caller or 'cloud_complete'} provider={self.config.get('cloud', {}).get('provider', 'groq')} mock=True before={before} after={after} prompt_chars={len(prompt)} latency={elapsed:.4f}s")
             if cache_path:
-                self._write_cache(cache_path, {"response": response, "tokens": t_tok, "prompt_tokens": p_tok, "completion_tokens": c_tok})
+                self._write_cache(cache_path, {"response": response, "tokens": t_tok, "prompt_tokens": p_tok, "completion_tokens": c_tok, "is_measured": False})
             return response
 
         before = self.usage.cloud_api_calls
-        response, p_tok, c_tok, t_tok = self._call_with_retries(prompt, system)
+        call_res = self._call_with_retries(prompt, system)
+        if len(call_res) == 5:
+            response, p_tok, c_tok, t_tok, is_measured = call_res
+        else:
+            response, p_tok, c_tok, t_tok = call_res
+            is_measured = False
         if response == _FAILURE_SENTINEL:
             self.usage.failed_calls += 1
             return response
-        self.usage.prompt_tokens += p_tok
-        self.usage.completion_tokens += c_tok
-        self.usage.total_tokens += t_tok
-        self.usage.tokens = self.usage.total_tokens
+        if is_measured:
+            self.usage.record_measured_tokens(p_tok, c_tok, t_tok)
+        else:
+            self.usage.record_estimated_tokens(p_tok, c_tok, t_tok)
         self.usage.cloud_api_calls += 1
         self.usage.api_calls = self.usage.cloud_api_calls
         self.usage.record_call_category(caller, getattr(self, "active_replan_reason", None))
@@ -354,7 +447,7 @@ class CloudLLMClient:
         print(f"[COUNTER] metric=cloud_planning_calls step={step} before={before} after={after} reason={caller or 'cloud_complete'} caller=CloudLLMClient.complete()")
         print(f"[CLOUD_COMPLETE] timestamp={time.time():.4f} step={step} caller={caller or 'cloud_complete'} provider={self.config.get('cloud', {}).get('provider', 'groq')} mock=False before={before} after={after} prompt_chars={len(prompt)} latency={elapsed:.4f}s")
         if cache_path:
-            self._write_cache(cache_path, {"response": response, "tokens": t_tok, "prompt_tokens": p_tok, "completion_tokens": c_tok})
+            self._write_cache(cache_path, {"response": response, "tokens": t_tok, "prompt_tokens": p_tok, "completion_tokens": c_tok, "is_measured": is_measured})
         return response
 
     # ------------------------------------------------------------------
@@ -375,7 +468,7 @@ class CloudLLMClient:
             return "JSONParseError"
         return f"UnexpectedError({name})"
 
-    def _call_with_retries(self, prompt: str, system: str) -> tuple[str, int, int, int]:
+    def _call_with_retries(self, prompt: str, system: str) -> tuple[str, int, int, int, bool]:
         provider = self.config.get("cloud", {}).get("provider", "unknown")
         model = self.config.get("cloud", {}).get("model", "unknown")
         last_err: Exception | None = None
@@ -427,12 +520,12 @@ class CloudLLMClient:
             "Retries exhausted -- degrading gracefully "
             "(cache -> previous plan -> device LLM). Simulation continues."
         )
-        return _FAILURE_SENTINEL, 0, 0, 0
+        return _FAILURE_SENTINEL, 0, 0, 0, False
 
     # ------------------------------------------------------------------
     # Raw provider call — UNCHANGED signature/behavior
     # ------------------------------------------------------------------
-    def _api_call(self, prompt: str, system: str) -> tuple[str, int, int, int]:
+    def _api_call(self, prompt: str, system: str) -> tuple[str, int, int, int, bool]:
         cloud = self.config["cloud"]
         provider = cloud.get("provider", "openai")
         client = self._get_client()
@@ -460,10 +553,18 @@ class CloudLLMClient:
                 temperature=cloud.get("temperature", 0.2),
             )
             text = resp.choices[0].message.content or ""
-            p_tok = resp.usage.prompt_tokens if resp.usage and hasattr(resp.usage, "prompt_tokens") else len(prompt.split())
-            c_tok = resp.usage.completion_tokens if resp.usage and hasattr(resp.usage, "completion_tokens") else len(text.split())
-            t_tok = resp.usage.total_tokens if resp.usage and hasattr(resp.usage, "total_tokens") else p_tok + c_tok
-            return text, p_tok, c_tok, t_tok
+            has_usage = bool(resp.usage and hasattr(resp.usage, "prompt_tokens") and resp.usage.prompt_tokens is not None)
+            if has_usage:
+                p_tok = resp.usage.prompt_tokens
+                c_tok = resp.usage.completion_tokens or 0
+                t_tok = getattr(resp.usage, "total_tokens", p_tok + c_tok) or (p_tok + c_tok)
+                is_measured = True
+            else:
+                p_tok = len(prompt.split())
+                c_tok = len(text.split())
+                t_tok = p_tok + c_tok
+                is_measured = False
+            return text, p_tok, c_tok, t_tok, is_measured
 
         elif provider == "anthropic":
             resp = client.messages.create(
@@ -472,10 +573,18 @@ class CloudLLMClient:
                 messages=[{"role": "user", "content": prompt}],
             )
             text = resp.content[0].text if resp.content else ""
-            p_tok = resp.usage.input_tokens if resp.usage else len(prompt.split())
-            c_tok = resp.usage.output_tokens if resp.usage else len(text.split())
-            t_tok = p_tok + c_tok
-            return text, p_tok, c_tok, t_tok
+            has_usage = bool(resp.usage and hasattr(resp.usage, "input_tokens") and resp.usage.input_tokens is not None)
+            if has_usage:
+                p_tok = resp.usage.input_tokens
+                c_tok = resp.usage.output_tokens or 0
+                t_tok = p_tok + c_tok
+                is_measured = True
+            else:
+                p_tok = len(prompt.split())
+                c_tok = len(text.split())
+                t_tok = p_tok + c_tok
+                is_measured = False
+            return text, p_tok, c_tok, t_tok, is_measured
 
         raise ValueError(f"Unknown provider: {provider}")
 

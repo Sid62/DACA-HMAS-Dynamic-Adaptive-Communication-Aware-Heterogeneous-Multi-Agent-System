@@ -37,6 +37,16 @@ from __future__ import annotations
 from typing import Any
 
 
+STANDARD_CATEGORIES = (
+    "global_planning",
+    "dispatch",
+    "local_coordination",
+    "peer_consensus",
+    "feedback_sync",
+    "handoff_reallocation",
+)
+
+
 class CommunicationStepCounter:
     """Passively counts completed logical planner-agent coordination rounds.
 
@@ -44,16 +54,10 @@ class CommunicationStepCounter:
     modify any simulation execution, LLM prompts, control loops, or random seeds.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, run_config: Any = None) -> None:
+        self.run_config = run_config
         self._count: int = 0
-        self._breakdown: dict[str, int] = {
-            "global_planning": 0,
-            "dispatch": 0,
-            "local_coordination": 0,
-            "peer_consensus": 0,
-            "feedback_sync": 0,
-            "handoff_reallocation": 0,
-        }
+        self._breakdown: dict[str, int] = {k: 0 for k in STANDARD_CATEGORIES}
 
     def reset(self) -> None:
         """Reset counter and breakdown to 0 at the beginning of each mission."""
@@ -69,12 +73,37 @@ class CommunicationStepCounter:
             amount: Number of completed logical communication rounds to add (default 1).
             reason: Technical description of the completed planner-agent coordination event.
         """
+        if category not in self._breakdown:
+            raise ValueError(
+                f"Invalid communication category '{category}'. Must be one of: {STANDARD_CATEGORIES}"
+            )
         if amount > 0:
             self._count += amount
-            if category in self._breakdown:
-                self._breakdown[category] += amount
-            else:
-                self._breakdown[category] = amount
+            self._breakdown[category] += amount
+
+    def record_global_planning(self, amount: int = 1, reason: str = "") -> None:
+        """Explicitly record a global planning communication step."""
+        self.increment("global_planning", amount=amount, reason=reason)
+
+    def record_dispatch(self, amount: int = 1, reason: str = "") -> None:
+        """Explicitly record a domain dispatch communication step."""
+        self.increment("dispatch", amount=amount, reason=reason)
+
+    def record_local_coordination(self, amount: int = 1, reason: str = "") -> None:
+        """Explicitly record a local coordination communication step."""
+        self.increment("local_coordination", amount=amount, reason=reason)
+
+    def record_peer_consensus(self, amount: int = 1, reason: str = "") -> None:
+        """Explicitly record a peer consensus communication step."""
+        self.increment("peer_consensus", amount=amount, reason=reason)
+
+    def record_feedback_sync(self, amount: int = 1, reason: str = "") -> None:
+        """Explicitly record a feedback sync communication step."""
+        self.increment("feedback_sync", amount=amount, reason=reason)
+
+    def record_handoff_reallocation(self, amount: int = 1, reason: str = "") -> None:
+        """Explicitly record a handoff/reallocation communication step."""
+        self.increment("handoff_reallocation", amount=amount, reason=reason)
 
     @property
     def value(self) -> int:
@@ -97,4 +126,5 @@ class CommunicationStepCounter:
     def breakdown(self) -> dict[str, int]:
         """Return the category breakdown of communication steps for explainability."""
         return dict(self._breakdown)
+
 
