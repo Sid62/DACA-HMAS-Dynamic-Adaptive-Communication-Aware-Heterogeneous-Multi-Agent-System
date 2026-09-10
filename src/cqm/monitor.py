@@ -36,6 +36,7 @@ class CommunicationQualityMonitor:
     packet_loss_window: int = 20
     n_nodes: int = 1
     node_stats: dict[int, NodeStats] = field(default_factory=dict)
+    link_stats: dict[tuple[int, int], NodeStats] = field(default_factory=dict)
     pairwise_cqi: np.ndarray | None = None
 
     def __post_init__(self) -> None:
@@ -62,15 +63,15 @@ class CommunicationQualityMonitor:
 
     def packet_loss_rate(self, node_id: int) -> float:
         """Eq 17a: L_n(t)."""
-        stats = self.node_stats[node_id]
-        if not stats.delivery_outcomes:
+        stats = self.node_stats.get(node_id)
+        if not stats or not stats.delivery_outcomes:
             return 0.0
         return 1.0 - (sum(stats.delivery_outcomes) / len(stats.delivery_outcomes))
 
     def normalized_latency(self, node_id: int) -> float:
         """Eq 17b: tau_hat_n(t)."""
-        stats = self.node_stats[node_id]
-        if not stats.latencies:
+        stats = self.node_stats.get(node_id)
+        if not stats or not stats.latencies:
             return 0.0
         tau = float(np.mean(stats.latencies))
         denom = self.tau_max - self.tau_min
@@ -80,8 +81,8 @@ class CommunicationQualityMonitor:
 
     def bandwidth_availability(self, node_id: int) -> float:
         """Eq 17c: B_n(t)."""
-        stats = self.node_stats[node_id]
-        if not stats.bytes_capacity:
+        stats = self.node_stats.get(node_id)
+        if not stats or not stats.bytes_capacity:
             return 1.0
         delivered = sum(stats.bytes_delivered)
         capacity = sum(stats.bytes_capacity)
@@ -95,37 +96,166 @@ class CommunicationQualityMonitor:
         ln = self.packet_loss_rate(node_id)
         tau_hat = self.normalized_latency(node_id)
         bn = self.bandwidth_availability(node_id)
-        return w1 * (1 - ln) + w2 * (1 - tau_hat) + w3 * bn
+        return float(np.clip(w1 * (1 - ln) + w2 * (1 - tau_hat) + w3 * bn, 0.0, 1.0))
+
+    def link_packet_loss_rate(self, sender_id: int, receiver_id: int) -> float:
+        """Packet loss rate L_ij(t) on link sender -> receiver."""
+        stats = self.link_stats.get((sender_id, receiver_id))
+        if not stats or not stats.delivery_outcomes:
+            return 0.0
+        return 1.0 - (sum(stats.delivery_outcomes) / len(stats.delivery_outcomes))
+
+    def link_normalized_latency(self, sender_id: int, receiver_id: int) -> float:
+        """Normalized latency on link sender -> receiver."""
+        stats = self.link_stats.get((sender_id, receiver_id))
+        if not stats or not stats.latencies:
+            return 0.0
+        tau = float(np.mean(stats.latencies))
+        denom = self.tau_max - self.tau_min
+        if denom <= 0:
+            return 0.0
+        return float(np.clip((tau - self.tau_min) / denom, 0.0, 1.0))
+
+    def link_bandwidth_availability(self, sender_id: int, receiver_id: int) -> float:
+        """Bandwidth availability on link sender -> receiver."""
+        stats = self.link_stats.get((sender_id, receiver_id))
+        if not stats or not stats.bytes_capacity:
+            return 1.0
+        delivered = sum(stats.bytes_delivered)
+        capacity = sum(stats.bytes_capacity)
+        if capacity <= 0:
+            return 1.0
+        return float(np.clip(delivered / capacity, 0.0, 1.0))
+
+    def link_cqi(self, sender_id: int, receiver_id: int) -> float | None:
+        """Directional CQI on link sender -> receiver if link observations exist."""
+        if (sender_id, receiver_id) not in self.link_stats:
+            return None
+        w1, w2, w3 = self.weights
+        ln = self.link_packet_loss_rate(sender_id, receiver_id)
+        tau_hat = self.link_normalized_latency(sender_id, receiver_id)
+        bn = self.link_bandwidth_availability(sender_id, receiver_id)
+        return float(np.clip(w1 * (1 - ln) + w2 * (1 - tau_hat) + w3 * bn, 0.0, 1.0))
 
     def system_cqi(self) -> float:
-        """Eq 19: CQI(t)."""
+        """Eq 19: Global system-level CQI summary CQI(t) for switching/global decisions."""
         if self.n_nodes == 0:
             return 1.0
         return sum(self.node_cqi(n) for n in range(self.n_nodes)) / self.n_nodes
 
-    def update_from_network(self, node_id: int, net: NetworkState) -> None:
+    def update_from_network(
+        self,
+        node_id: int,
+        net: NetworkState,
+        receiver_id: int | None = None,
+    ) -> None:
+        """Ingest network observation for a node and optionally a specific link."""
+        if node_id not in self.node_stats:
+            self.node_stats[node_id] = NodeStats(
+                bytes_delivered=deque(maxlen=self.bandwidth_window),
+                bytes_capacity=deque(maxlen=self.bandwidth_window),
+                delivery_outcomes=deque(maxlen=self.packet_loss_window),
+            )
         stats = self.node_stats[node_id]
-        # Record each message's outcome (1=delivered, 0=lost) into a bounded
-        # window instead of accumulating lifetime totals.
         for _ in range(max(net.msg_sent, 0)):
             stats.delivery_outcomes.append(1 if net.ack_received > 0 else 0)
         stats.latencies.append(net.latency)
         stats.bytes_delivered.append(net.bytes_delivered)
         stats.bytes_capacity.append(net.bytes_capacity)
 
-    def update_pairwise(self, distance_matrix: np.ndarray, c1: float) -> np.ndarray:
-        """Build N x N pairwise CQI matrix Q(t)."""
+        if receiver_id is not None:
+            self.update_link(node_id, receiver_id, net)
+
+    def update_link(self, sender_id: int, receiver_id: int, net: NetworkState) -> None:
+        """Record directional communication outcome on link sender -> receiver."""
+        pair = (sender_id, receiver_id)
+        if pair not in self.link_stats:
+            self.link_stats[pair] = NodeStats(
+                bytes_delivered=deque(maxlen=self.bandwidth_window),
+                bytes_capacity=deque(maxlen=self.bandwidth_window),
+                delivery_outcomes=deque(maxlen=self.packet_loss_window),
+            )
+        lstats = self.link_stats[pair]
+        for _ in range(max(net.msg_sent, 0)):
+            lstats.delivery_outcomes.append(1 if net.ack_received > 0 else 0)
+        lstats.latencies.append(net.latency)
+        lstats.bytes_delivered.append(net.bytes_delivered)
+        lstats.bytes_capacity.append(net.bytes_capacity)
+
+    def update_pairwise(
+        self,
+        distance_matrix: np.ndarray,
+        c1: float,
+        network: Any | None = None,
+        directional: bool | None = None,
+        step: int = 0,
+    ) -> np.ndarray:
+        """Build N x N pairwise CQI matrix Q(t) (Eq 23, 25).
+
+        For each pair (i, j):
+          - If i == j: Q[i, j] = 1.0 (self-loop).
+          - If distance_matrix[i, j] > c1: Q[i, j] = 0.0 (out of range / disconnected).
+          - If distance_matrix[i, j] <= c1:
+            Q[i, j] reflects the quality of that specific link i -> j:
+              1. Physical channel quality: uses network.link_channel_quality(step, d_ij, i, j)
+                 when a network model is provided, capturing profile dynamics, scenario
+                 shadowing, interference, and log-distance path loss. Otherwise falls back to
+                 distance_quality(d_ij, c1).
+              2. Endpoint observations:
+                 - If directional per-link stats exist for (i, j), use link_cqi(i, j).
+                 - If directional mode is explicitly active, use asymmetric transmitter/receiver weighting.
+                 - Otherwise (symmetric reciprocal channel), both endpoints must be functional,
+                   bottlenecked by min(node_cqi(i), node_cqi(j)).
+        """
+        from src.env.network_model import distance_quality
+
         n = distance_matrix.shape[0]
-        q = np.zeros((n, n))
-        sys_cqi = self.system_cqi()
+        q = np.zeros((n, n), dtype=float)
+
+        good_range = getattr(network, "good_range", min(20.0, 0.4 * c1))
+        medium_range = getattr(network, "medium_range", min(40.0, 0.8 * c1))
+
+        node_cqis = [self.node_cqi(i) if i in self.node_stats else 1.0 for i in range(n)]
+
         for i in range(n):
             for j in range(n):
                 if i == j:
                     q[i, j] = 1.0
-                elif distance_matrix[i, j] <= c1:
-                    q[i, j] = sys_cqi
-                else:
+                    continue
+
+                d_ij = float(distance_matrix[i, j])
+                if d_ij > c1:
                     q[i, j] = 0.0
+                    continue
+
+                # 1. Physical channel attenuation on this specific link
+                if network is not None and hasattr(network, "link_channel_quality"):
+                    q_channel = network.link_channel_quality(
+                        step, d_ij, sender_id=i, receiver_id=j
+                    )
+                else:
+                    q_channel = distance_quality(
+                        d_ij,
+                        communication_range=c1,
+                        good_range=good_range,
+                        medium_range=medium_range,
+                    )
+
+                # 2. Endpoint communication quality
+                link_q = self.link_cqi(i, j)
+                if link_q is not None:
+                    # Direct directional link observation exists
+                    q_endpoint = link_q
+                elif directional:
+                    # Directional mode with sender (60%) and receiver (40%) weighting
+                    q_endpoint = 0.6 * node_cqis[i] + 0.4 * node_cqis[j]
+                else:
+                    # Reciprocal symmetric wireless channel: communication requires both
+                    # endpoints to be operational; bottleneck is min(node_cqi(i), node_cqi(j)).
+                    q_endpoint = min(node_cqis[i], node_cqis[j])
+
+                q[i, j] = float(np.clip(q_endpoint * q_channel, 0.0, 1.0))
+
         self.pairwise_cqi = q
         return q
 

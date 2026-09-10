@@ -44,7 +44,7 @@ def coalition_feasibility_score(
     min_psi = 1.0
     for i in member_indices:
         for j in member_indices:
-            if i < j:
+            if i != j:
                 min_psi = min(min_psi, psi_matrix[i, j])
     return float(min_psi)
 

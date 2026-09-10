@@ -829,7 +829,7 @@ class CloudLLMClient:
                             idx_i = id_to_idx.get(members[i])
                             idx_j = id_to_idx.get(members[j])
                             if idx_i is not None and idx_j is not None:
-                                if cqi_matrix[idx_i][idx_j] < gamma_min:
+                                if cqi_matrix[idx_i][idx_j] < gamma_min or cqi_matrix[idx_j][idx_i] < gamma_min:
                                     return False
             return True
 

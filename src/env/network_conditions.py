@@ -219,6 +219,73 @@ class NetworkConditionGenerator:
             ack_received=ack,
         )
 
+    def link_channel_quality(
+        self,
+        t: int,
+        distance: float,
+        sender_id: int | None = None,
+        receiver_id: int | None = None,
+    ) -> float:
+        """Channel quality variable for a specific link (d, sender, receiver) in [0, 1]."""
+        if distance > self.communication_range:
+            return 0.0
+
+        from src.env.network_model import distance_quality
+
+        # Base macro-cycle channel quality
+        q_base = self._channel_quality(t)
+
+        # Specific link distance attenuation
+        dist_q = distance_quality(
+            distance, self.communication_range, self.good_range, self.medium_range
+        )
+
+        return float(np.clip(q_base * dist_q, 0.0, 0.98))
+
+    def simulate_link(
+        self,
+        t: int,
+        sender_id: int,
+        receiver_id: int,
+        distance: float | None = None,
+        payload_bytes: float = 256.0,
+    ) -> NetworkState:
+        """Simulate message delivery over a specific link (sender -> receiver)."""
+        from src.env.network_model import burst_loss_active
+
+        if distance is None and self.fleet is not None:
+            a_i = self.fleet.get_agent(sender_id) if hasattr(self.fleet, "get_agent") else None
+            a_j = self.fleet.get_agent(receiver_id) if hasattr(self.fleet, "get_agent") else None
+            if a_i is not None and a_j is not None:
+                from src.env.agents import dist
+                distance = dist(a_i.position, a_j.position)
+            else:
+                distance = 10.0
+        elif distance is None:
+            distance = 10.0
+
+        q_link = self.link_channel_quality(t, distance, sender_id, receiver_id)
+        loss = float(np.clip(1.0 - q_link, 0.0, 0.95))
+        base_lat = 0.01 + self.base_delay_prob * 0.5
+        latency = float(max(base_lat + (1.0 - q_link) * 1.5, 0.0))
+        bw_avail = float(np.clip(q_link - self.base_delay_prob * 0.3, 0.10, 1.0))
+
+        if burst_loss_active(self.rng, t, burst_probability=0.02, burst_duration=2):
+            loss = float(np.clip(loss + 0.30, 0.0, 0.95))
+            latency += 0.20
+
+        delivered = payload_bytes * bw_avail
+        msg_sent = 1
+        ack = 0 if self.rng.random() < loss else 1
+        return NetworkState(
+            packet_loss_rate=loss,
+            latency=latency,
+            bandwidth_utilization=1.0 - bw_avail,
+            bytes_delivered=delivered,
+            msg_sent=msg_sent,
+            ack_received=ack,
+        )
+
  
     @classmethod
     def from_scenario(

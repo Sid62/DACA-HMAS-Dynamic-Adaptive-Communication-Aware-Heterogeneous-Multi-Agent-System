@@ -304,8 +304,18 @@ class DACAOrchestrator:
                    f"Latency={net_state.latency:.3f} "
                    f"BW_Util={net_state.bandwidth_utilization:.3f}"
                    )
+            c1_thresh = self.thresholds.get("C1", 50.0)
+            if self.config.use_cqm and hasattr(self.env.network, "simulate_link"):
+                for i in range(fleet.n_agents):
+                    for j in range(fleet.n_agents):
+                        if i != j and dist_mat[i, j] <= c1_thresh:
+                            link_state = self.env.network.simulate_link(
+                                step, i, j, distance=float(dist_mat[i, j])
+                            )
+                            self.cqm.update_link(i, j, link_state)
+
             cqi_matrix = self.cqm.update_pairwise(
-                dist_mat, self.thresholds.get("C1", 50.0)
+                dist_mat, c1_thresh, network=self.env.network, step=step
             )
             cqi_evaluation_time_s += (time.perf_counter() - t_cqi_start)
             sys_cqi = self.cqm.system_cqi() if self.config.use_cqm else 1.0
