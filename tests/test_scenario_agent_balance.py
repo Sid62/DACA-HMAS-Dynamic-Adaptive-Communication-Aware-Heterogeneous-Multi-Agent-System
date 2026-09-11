@@ -47,7 +47,7 @@ KIN = {
 @pytest.mark.parametrize(
     "scenario_name,expected_total,expected_counts",
     [
-        ("logistics", 8, {"num_uav": 2, "num_vehicle": 3, "num_robot": 3}),
+        ("logistics", 10, {"num_uav": 3, "num_vehicle": 4, "num_robot": 3}),
         ("inspection", 8, {"num_uav": 3, "num_vehicle": 2, "num_robot": 3}),
         ("search_rescue", 10, {"num_uav": 3, "num_vehicle": 3, "num_robot": 4}),
     ],
@@ -70,9 +70,9 @@ def test_scenario_agent_counts_and_types(scenario_name, expected_total, expected
     "scenario_name,expected_ids",
     [
         ("logistics", [
-            "uav_0", "uav_1",
-            "vehicle_2", "vehicle_3", "vehicle_4",
-            "robot_5", "robot_6", "robot_7"
+            "uav_0", "uav_1", "uav_2",
+            "vehicle_3", "vehicle_4", "vehicle_5", "vehicle_6",
+            "robot_7", "robot_8", "robot_9"
         ]),
         ("inspection", [
             "uav_0", "uav_1", "uav_2",
@@ -133,15 +133,15 @@ def test_fleet_capability_summary_logistics():
     sc = get_scenario("logistics", th, seed=42)
     summary = get_fleet_capability_summary(sc)
     
-    # 2 UAV, 3 Vehicle, 3 Robot = 8 agents
-    assert summary["total_agents"] == 8
-    assert summary["sensing_capable"] == 2      # 2 UAVs
-    assert summary["navigation_capable"] == 5   # 2 UAVs + 3 Vehicles
-    assert summary["transport_capable"] == 6    # 3 Vehicles + 3 Robots
+    # 3 UAV, 4 Vehicle, 3 Robot = 10 agents
+    assert summary["total_agents"] == 10
+    assert summary["sensing_capable"] == 3      # 3 UAVs
+    assert summary["navigation_capable"] == 7   # 3 UAVs + 4 Vehicles
+    assert summary["transport_capable"] == 7    # 4 Vehicles + 3 Robots
     assert summary["lifting_capable"] == 3      # 3 Robots
-    assert summary["rescue_capable"] == 6       # 3 Vehicles + 3 Robots
-    assert summary["inspection_capable"] == 2   # 2 UAVs
-    assert summary["multi_skill_agents"] == 8   # 100% multi-skill
+    assert summary["rescue_capable"] == 7       # 4 Vehicles + 3 Robots
+    assert summary["inspection_capable"] == 3   # 3 UAVs
+    assert summary["multi_skill_agents"] == 10  # 100% multi-skill
 
 
 def test_fleet_capability_summary_inspection():
@@ -184,9 +184,9 @@ def test_print_scenario_agent_config():
     output = print_scenario_agent_config(sc)
     
     assert "Scenario: Logistics" in output
-    assert "Total Agents: 8" in output
-    assert "UAVs: 2" in output
-    assert "Vehicles: 3" in output
+    assert "Total Agents: 10" in output
+    assert "UAVs: 3" in output
+    assert "Vehicles: 4" in output
     assert "Robots: 3" in output
     assert "Skills:" in output
     assert "UAV: navigate, sense, inspect" in output

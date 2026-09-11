@@ -73,8 +73,8 @@ ca_overlap_delta: 3   # timesteps
 # Scenarios
 scenarios:
   logistics:
-    num_uav: 2
-    num_vehicle: 3
+    num_uav: 3
+    num_vehicle: 4
     num_robot: 3
     num_subtasks: 6
     comm_delay_prob: 0.0

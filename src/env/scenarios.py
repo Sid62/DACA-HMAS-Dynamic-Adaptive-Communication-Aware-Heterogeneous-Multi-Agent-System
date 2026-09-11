@@ -105,8 +105,8 @@ def build_logistics_scenario(cfg: dict[str, Any], seed: int = 0) -> Scenario:
         instruction="Coordinate UAVs, vehicles, and robots to deliver packages across the warehouse zone.",
         subtasks=subtasks,
         agent_config={
-            "num_uav": ac.get("num_uav", 2),
-            "num_vehicle": ac.get("num_vehicle", 3),
+            "num_uav": ac.get("num_uav", 3),
+            "num_vehicle": ac.get("num_vehicle", 4),
             "num_robot": ac.get("num_robot", 3),
         },
         comm_delay_prob=ac.get("comm_delay_prob", 0.0),
