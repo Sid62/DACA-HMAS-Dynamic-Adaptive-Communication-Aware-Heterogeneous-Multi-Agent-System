@@ -283,6 +283,9 @@ class DACAOrchestrator:
         self.env = DACAEnv(
             self.scenario, self.thresholds, self.network_profile, self.seed, self.max_steps
         )
+        from src.env.scenarios import print_scenario_agent_config
+        print_scenario_agent_config(self.env.scenario, self.env.fleet)
+
         llm_cfg = get_llm_config()
 
         # Build one unified run configuration instance for the experiment

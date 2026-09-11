@@ -73,21 +73,21 @@ ca_overlap_delta: 3   # timesteps
 # Scenarios
 scenarios:
   logistics:
-    num_uav: 3
-    num_vehicle: 2
-    num_robot: 2
+    num_uav: 2
+    num_vehicle: 3
+    num_robot: 3
     num_subtasks: 6
     comm_delay_prob: 0.0
     packet_loss_rate: 0.0
   inspection:
-    num_uav: 4
+    num_uav: 3
     num_vehicle: 2
     num_robot: 3
     num_subtasks: 8
     comm_delay_prob: 0.10
     packet_loss_rate: 0.01
   search_rescue:
-    num_uav: 5
+    num_uav: 3
     num_vehicle: 3
     num_robot: 4
     num_subtasks: 10

@@ -43,15 +43,15 @@ device:
   temperature: 0.0
 
 
-
 # Set false to use real Cloud API + local GPU Device LLM
 use_mock: false
 
-cache_responses: true
+
+cache_responses: false
 cache_dir: .llm_cache
 
 experience_reuse:
-  enabled: true
+  enabled: false
   store_path: experience_store.json
 
 # --- GPU production profile (uncomment and set use_mock: false) ---

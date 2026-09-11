@@ -105,9 +105,9 @@ def build_logistics_scenario(cfg: dict[str, Any], seed: int = 0) -> Scenario:
         instruction="Coordinate UAVs, vehicles, and robots to deliver packages across the warehouse zone.",
         subtasks=subtasks,
         agent_config={
-            "num_uav": ac.get("num_uav", 3),
-            "num_vehicle": ac.get("num_vehicle", 2),
-            "num_robot": ac.get("num_robot", 2),
+            "num_uav": ac.get("num_uav", 2),
+            "num_vehicle": ac.get("num_vehicle", 3),
+            "num_robot": ac.get("num_robot", 3),
         },
         comm_delay_prob=ac.get("comm_delay_prob", 0.0),
         packet_loss_rate=ac.get("packet_loss_rate", 0.0),
@@ -151,7 +151,7 @@ def build_inspection_scenario(cfg: dict[str, Any], seed: int = 0) -> Scenario:
         seed,
     )
 
-    num_uav = ac.get("num_uav", 4)
+    num_uav = ac.get("num_uav", 3)
     num_vehicle = ac.get("num_vehicle", 2)
     num_robot = ac.get("num_robot", 3)
 
@@ -226,7 +226,7 @@ def build_search_rescue_scenario(cfg: dict[str, Any], seed: int = 0) -> Scenario
         instruction="Search and rescue operation: locate and extract persons from disaster zone.",
         subtasks=subtasks,
         agent_config={
-            "num_uav": ac.get("num_uav", 5),
+            "num_uav": ac.get("num_uav", 3),
             "num_vehicle": ac.get("num_vehicle", 3),
             "num_robot": ac.get("num_robot", 4),
         },
@@ -261,3 +261,201 @@ def get_scenario(name: str, thresholds: dict[str, Any], seed: int = 0) -> Scenar
     if builder is None:
         raise ValueError(f"Unknown scenario: {name}")
     return builder(thresholds, seed)
+
+
+def get_fleet_capability_summary(scenario: Scenario, fleet: Any | None = None) -> dict[str, Any]:
+    """Compute counts of agents with specific capabilities for a scenario.
+    
+    Returns:
+        Dictionary containing counts of sensing, navigation, transport,
+        lifting, rescue, inspection, and multi-skill agents.
+    """
+    from src.env.agents import AgentType, ROLE_SKILLS
+    if fleet is not None and hasattr(fleet, "agents"):
+        agent_list = fleet.agents
+        skills_by_agent = [a.skills for a in agent_list]
+    else:
+        ac = scenario.agent_config
+        skills_by_agent = []
+        for atype, key in [
+            (AgentType.UAV, "num_uav"),
+            (AgentType.VEHICLE, "num_vehicle"),
+            (AgentType.ROBOT, "num_robot"),
+        ]:
+            for _ in range(ac.get(key, 0)):
+                skills_by_agent.append(ROLE_SKILLS[atype])
+
+    total_agents = len(skills_by_agent)
+    
+    sensing = sum(1 for s in skills_by_agent if "sense" in s)
+    navigation = sum(1 for s in skills_by_agent if "navigate" in s)
+    transport = sum(1 for s in skills_by_agent if "transport" in s)
+    lifting = sum(1 for s in skills_by_agent if "lift" in s)
+    rescue = sum(1 for s in skills_by_agent if "rescue" in s)
+    inspection = sum(1 for s in skills_by_agent if "inspect" in s)
+    multi_skill = sum(1 for s in skills_by_agent if len(set(s)) > 1)
+
+    return {
+        "scenario": scenario.name,
+        "total_agents": total_agents,
+        "sensing_capable": sensing,
+        "navigation_capable": navigation,
+        "transport_capable": transport,
+        "lifting_capable": lifting,
+        "rescue_capable": rescue,
+        "inspection_capable": inspection,
+        "multi_skill_agents": multi_skill,
+        "proportions": {
+            "sensing": round(sensing / total_agents, 3) if total_agents else 0.0,
+            "navigation": round(navigation / total_agents, 3) if total_agents else 0.0,
+            "transport": round(transport / total_agents, 3) if total_agents else 0.0,
+            "lifting": round(lifting / total_agents, 3) if total_agents else 0.0,
+            "rescue": round(rescue / total_agents, 3) if total_agents else 0.0,
+            "inspection": round(inspection / total_agents, 3) if total_agents else 0.0,
+            "multi_skill": round(multi_skill / total_agents, 3) if total_agents else 0.0,
+        },
+    }
+
+
+def validate_scenario_agent_balance(
+    scenario: Scenario, fleet: Any | None = None
+) -> dict[str, Any]:
+    """Validate that the scenario agent fleet is balanced, feasible, and not severely skewed.
+
+    Reports:
+    - total agents
+    - counts by agent type
+    - capability coverage
+    - number of task requirements covered by available fleet
+    - whether the scenario has severe capability imbalance
+    """
+    from src.env.agents import AgentType, ROLE_SKILLS
+    ac = scenario.agent_config
+    counts_by_type = {
+        "uav": ac.get("num_uav", 0),
+        "vehicle": ac.get("num_vehicle", 0),
+        "robot": ac.get("num_robot", 0),
+    }
+    total_agents = sum(counts_by_type.values())
+    proportions_by_type = {
+        k: round(v / total_agents, 3) if total_agents else 0.0
+        for k, v in counts_by_type.items()
+    }
+
+    cap_summary = get_fleet_capability_summary(scenario, fleet)
+
+    # Check task requirements coverage
+    subtasks = scenario.subtasks
+    covered_subtasks = 0
+    subtask_feasibility: dict[str, bool] = {}
+
+    if fleet is not None and hasattr(fleet, "agents"):
+        agent_skills = [set(a.skills) for a in fleet.agents]
+    else:
+        agent_skills = []
+        for atype, key in [
+            (AgentType.UAV, "num_uav"),
+            (AgentType.VEHICLE, "num_vehicle"),
+            (AgentType.ROBOT, "num_robot"),
+        ]:
+            for _ in range(ac.get(key, 0)):
+                agent_skills.append(set(ROLE_SKILLS[atype]))
+
+    for st in subtasks:
+        req = set(st.required_skills)
+        # Check single-agent or coalition (pair) feasibility
+        is_feasible = False
+        # 1. Single agent covers
+        for s in agent_skills:
+            if req.issubset(s):
+                is_feasible = True
+                break
+        # 2. Pair coalition covers
+        if not is_feasible:
+            for i in range(len(agent_skills)):
+                for j in range(i + 1, len(agent_skills)):
+                    if req.issubset(agent_skills[i] | agent_skills[j]):
+                        is_feasible = True
+                        break
+                if is_feasible:
+                    break
+        subtask_feasibility[st.subtask_id] = is_feasible
+        if is_feasible:
+            covered_subtasks += 1
+
+    coverage_rate = (
+        round(covered_subtasks / len(subtasks), 3) if subtasks else 1.0
+    )
+
+    # Severe capability imbalance checks
+    has_severe_imbalance = False
+    imbalance_reasons: list[str] = []
+
+    if any(count == 0 for count in counts_by_type.values()):
+        has_severe_imbalance = True
+        imbalance_reasons.append("One or more agent types have zero agents.")
+
+    if coverage_rate < 1.0:
+        has_severe_imbalance = True
+        imbalance_reasons.append(
+            f"Fleet cannot cover all task skill requirements ({covered_subtasks}/{len(subtasks)} feasible)."
+        )
+
+    # Check if any single type disproportionately dominates (> 65%) or is under-represented (< 15%)
+    for atype_name, prop in proportions_by_type.items():
+        if prop > 0.65:
+            has_severe_imbalance = True
+            imbalance_reasons.append(
+                f"Agent type '{atype_name}' dominates fleet with {prop*100:.1f}% (>65%)."
+            )
+        elif prop < 0.15:
+            has_severe_imbalance = True
+            imbalance_reasons.append(
+                f"Agent type '{atype_name}' is under-represented with {prop*100:.1f}% (<15%)."
+            )
+
+    return {
+        "scenario": scenario.name,
+        "total_agents": total_agents,
+        "counts_by_type": counts_by_type,
+        "proportions_by_type": proportions_by_type,
+        "capability_summary": cap_summary,
+        "total_subtasks": len(subtasks),
+        "covered_subtasks": covered_subtasks,
+        "coverage_rate": coverage_rate,
+        "subtask_feasibility": subtask_feasibility,
+        "has_severe_imbalance": has_severe_imbalance,
+        "imbalance_reasons": imbalance_reasons,
+    }
+
+
+def print_scenario_agent_config(
+    scenario: Scenario, fleet: Any | None = None
+) -> str:
+    """Print clean configuration summary at startup."""
+    from src.env.agents import AgentType, ROLE_SKILLS
+    ac = scenario.agent_config
+    num_uav = ac.get("num_uav", 0)
+    num_vehicle = ac.get("num_vehicle", 0)
+    num_robot = ac.get("num_robot", 0)
+    total_agents = num_uav + num_vehicle + num_robot
+
+    uav_skills = ", ".join(ROLE_SKILLS[AgentType.UAV])
+    veh_skills = ", ".join(ROLE_SKILLS[AgentType.VEHICLE])
+    rob_skills = ", ".join(ROLE_SKILLS[AgentType.ROBOT])
+
+    summary_lines = [
+        f"Scenario: {scenario.name.replace('_', ' ').title()}",
+        f"Total Agents: {total_agents}",
+        f"UAVs: {num_uav}",
+        f"Vehicles: {num_vehicle}",
+        f"Robots: {num_robot}",
+        "",
+        "Skills:",
+        f"UAV: {uav_skills}",
+        f"Vehicle: {veh_skills}",
+        f"Robot: {rob_skills}",
+    ]
+    summary_text = "\n".join(summary_lines)
+    print("\n" + summary_text + "\n")
+    return summary_text
