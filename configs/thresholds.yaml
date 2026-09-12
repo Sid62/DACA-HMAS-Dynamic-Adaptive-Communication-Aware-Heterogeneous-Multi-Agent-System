@@ -64,7 +64,7 @@ kinematics:
     max_speed: 10.0
     max_turn_rate: 0.8
   robot:
-    max_speed: 4.5
+    max_speed: 4.7
     max_turn_rate: 2.0
 
 # CA transfer overlap window (Eq 30)
