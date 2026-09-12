@@ -121,4 +121,4 @@ class DACAEnv:
         total = len(self._subtasks)
         if total == 0:
             return 0.0
-        return len(self.state.completed_subtasks) / total
+        return len(set(self.state.completed_subtasks)) / total

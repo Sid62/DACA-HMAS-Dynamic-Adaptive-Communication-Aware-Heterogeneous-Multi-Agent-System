@@ -357,6 +357,8 @@ class PostSwitchReallocator:
             r_max = 100.0
             w_d, w_w, w_b, w_c = 0.40, 0.40, 0.10, 0.10
 
+            from src.decomposition.distance_feasible_decomp import domain_skill_affinity
+
             def _agent_score(agent: AgentState) -> float:
                 v = float(getattr(fleet.kinematics.get(agent.agent_type.value, None), "max_speed", 1.0)) if hasattr(fleet, "kinematics") and fleet.kinematics else 1.0
                 d = dist(agent.position, st.target)
@@ -364,10 +366,13 @@ class PostSwitchReallocator:
                 idx = id_to_idx.get(agent.agent_id, 0)
                 mean_cqi = float(np.mean(cqi_matrix[idx, :])) if cqi_matrix.size > 0 else 1.0
                 norm_d = min(eta / (r_max / 15.0), 1.0)
-                norm_w = min(workload.get(agent.agent_id, 0) / n_tasks, 1.0)
+                wl = workload.get(agent.agent_id, 0)
+                norm_w = min(wl / n_tasks, 1.0)
                 norm_b = min(agent.battery / 100.0, 1.0)
                 norm_c = min(mean_cqi, 1.0)
-                return w_d * norm_d + w_w * norm_w - w_b * norm_b - w_c * norm_c
+                aff_penalty = domain_skill_affinity(agent, req) * 5.0
+                wl_penalty = 100.0 if wl > 0 else 0.0
+                return aff_penalty + wl_penalty + w_d * norm_d + w_w * norm_w - w_b * norm_b - w_c * norm_c
 
             # 1. Single agent covering all skills
             if full_cands:

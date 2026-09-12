@@ -80,7 +80,7 @@ def should_replan(
     # a prerequisite for any execution at all, not an optimization choice.
     if not plan_state.initialized:
         return True, "mission_initialization"
-     # --- Trigger 1b: Architecture switch -----------------------------------
+    # --- Trigger 1b: Architecture switch -----------------------------------
     # Evaluate Plan Continuity on architecture switch (Centralized <-> Decentralized).
     # If the active plan is still valid (V_plan >= threshold), preserve and continue execution!
     if mode != plan_state.known_mode:
@@ -91,6 +91,24 @@ def should_replan(
                 plan_state.known_mode = mode  # Record absorbed switch to prevent re-triggering
                 return False, ""
         return True, f"architecture_switched:{plan_state.known_mode}->{mode}"
+
+    # --- Trigger 1g: Active plan capacity violation (duplicate agents across tasks) ---
+    if continuity_engine is not None and continuity_engine.active_context is not None:
+        active_assignments = continuity_engine.active_context.assignments
+        incomplete_sids = {s.subtask_id for s in subtasks if not s.completed}
+        seen_agents = set()
+        capacity_violated = False
+        for sid in incomplete_sids:
+            aids = active_assignments.get(sid, [])
+            for aid in aids:
+                if aid in seen_agents:
+                    capacity_violated = True
+                    break
+                seen_agents.add(aid)
+            if capacity_violated:
+                break
+        if capacity_violated:
+            return True, "active_plan_capacity_violation_duplicate_agent"
     
     # --- Rate limiter: everything below this line is subject to the
     # minimum replanning interval. Architecture switch above is exempt

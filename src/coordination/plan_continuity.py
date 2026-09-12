@@ -78,8 +78,22 @@ class PlanContinuityEngine:
         targets = {s.subtask_id: (s.target.x, s.target.y) for s in subtasks}
         skills = {s.subtask_id: set(s.required_skills) for s in subtasks}
         completed = {s.subtask_id for s in subtasks if s.completed}
+        # Enforce capacity constraint: no agent assigned to multiple active tasks
+        clean_assignments: dict[str, list[str]] = {}
+        seen_agents: set[str] = set()
+        for sid, aids in assignments.items():
+            if sid in completed:
+                clean_assignments[sid] = list(aids)
+                continue
+            unique_aids = []
+            for aid in aids:
+                if aid not in seen_agents:
+                    unique_aids.append(aid)
+                    seen_agents.add(aid)
+            clean_assignments[sid] = unique_aids
+
         self.active_context = ActivePlanContext(
-            assignments=dict(assignments),
+            assignments=clean_assignments,
             coalitions=list(coalitions),
             completed_subtask_ids=completed,
             subtask_targets=targets,
@@ -270,27 +284,45 @@ class PlanContinuityEngine:
 
         agent_map = {a.agent_id: a for a in fleet.agents}
         locked_assignments = {sid: list(agents) for sid, agents in new_assignments.items()}
-        locked_agent_ids: set[str] = set()
 
         from src.decomposition.distance_feasible_decomp import validate_assignment_skills
 
+        # Ensure each agent is locked to at most one task (the one closest to target)
+        locked_agent_task: dict[str, tuple[str, float]] = {}
         for st in subtasks:
             if st.completed:
                 continue
             sid = st.subtask_id
             prev_agents = previous_assignments.get(sid, [])
             if prev_agents and validate_assignment_skills(prev_agents, st, fleet):
-                # If any assigned agent is committed within lock threshold, lock the assigned team
                 if any(aid in agent_map and dist(agent_map[aid].position, st.target) < lock_threshold for aid in prev_agents):
-                    locked_assignments[sid] = [aid for aid in prev_agents if aid in agent_map]
-                    locked_agent_ids.update(locked_assignments[sid])
+                    for aid in prev_agents:
+                        if aid not in agent_map:
+                            continue
+                        d = dist(agent_map[aid].position, st.target)
+                        if aid in locked_agent_task:
+                            if d < locked_agent_task[aid][1]:
+                                locked_agent_task[aid] = (sid, d)
+                        else:
+                            locked_agent_task[aid] = (sid, d)
+
+        locked_agent_ids: set[str] = set(locked_agent_task.keys())
+
+        for st in subtasks:
+            if st.completed:
+                continue
+            sid = st.subtask_id
+            prev_agents = previous_assignments.get(sid, [])
+            committed = [aid for aid in prev_agents if locked_agent_task.get(aid, (None,))[0] == sid]
+            if committed and validate_assignment_skills(committed, st, fleet):
+                locked_assignments[sid] = committed
 
         # Clear duplicate assignments for locked agents in other subtasks
         for sid, agents in list(locked_assignments.items()):
             st = next((s for s in subtasks if s.subtask_id == sid), None)
             if st and st.completed:
                 continue
-            curr_agents = [aid for aid in agents if aid not in locked_agent_ids or aid in previous_assignments.get(sid, [])]
+            curr_agents = [aid for aid in agents if aid not in locked_agent_ids or locked_agent_task.get(aid, (None,))[0] == sid]
             if st and curr_agents and validate_assignment_skills(curr_agents, st, fleet):
                 locked_assignments[sid] = curr_agents
             else:
@@ -305,7 +337,7 @@ class PlanContinuityEngine:
         fleet: AgentFleet,
     ) -> dict[str, list[str]]:
         """Remove duplicate agent assignments across tasks, ensuring each agent is assigned to at most one task."""
-        from src.decomposition.distance_feasible_decomp import validate_assignment_skills
+        from src.decomposition.distance_feasible_decomp import validate_assignment_skills, domain_skill_affinity, validate_joint_assignment
 
         agent_map = {a.agent_id: a for a in fleet.agents}
         task_map = {s.subtask_id: s for s in subtasks}
@@ -345,6 +377,33 @@ class PlanContinuityEngine:
             else:
                 cleaned[sid] = []
 
+        # Repair any subtasks that were emptied and now lack assigned agents
+        busy_agents = {aid for aids in cleaned.values() for aid in aids}
+        free_agents = [aid for aid in agent_map if aid not in busy_agents]
+
+        for sid, aids in list(cleaned.items()):
+            if not aids:
+                st = task_map.get(sid)
+                if st and not st.completed and free_agents:
+                    req_skills = set(st.required_skills)
+                    cand_singles = [
+                        aid for aid in free_agents
+                        if req_skills.issubset(set(agent_map[aid].skills))
+                        and dist(agent_map[aid].position, st.target) <= 100.0
+                    ]
+                    if cand_singles:
+                        best = min(
+                            cand_singles,
+                            key=lambda aid: (
+                                domain_skill_affinity(agent_map[aid], req_skills),
+                                dist(agent_map[aid].position, st.target),
+                                aid,
+                            ),
+                        )
+                        cleaned[sid] = [best]
+                        free_agents.remove(best)
+                        busy_agents.add(best)
+
         return cleaned
 
     def get_updated_executable_assignments(
@@ -365,7 +424,11 @@ class PlanContinuityEngine:
         if not incomplete_subtasks:
             return {}
 
-        from src.decomposition.distance_feasible_decomp import validate_assignment_skills, validate_joint_assignment
+        from src.decomposition.distance_feasible_decomp import (
+            validate_assignment_skills,
+            validate_joint_assignment,
+            domain_skill_affinity,
+        )
 
         # 1. Filter assignments to incomplete subtasks only, validating required skills
         updated_assignments: dict[str, list[str]] = {}
@@ -381,7 +444,7 @@ class PlanContinuityEngine:
             curr_agents = list(raw_agents)
             if (
                 curr_agents
-                and validate_assignment_skills(curr_agents, s, fleet)
+                and validate_joint_assignment(curr_agents, s, fleet, self.c_task, self.r_reach)
                 and not any(aid in assigned_agents for aid in curr_agents)
             ):
                 updated_assignments[sid] = curr_agents
@@ -410,6 +473,7 @@ class PlanContinuityEngine:
                             best_agent = min(
                                 eligible_singles,
                                 key=lambda aid: (
+                                    domain_skill_affinity(agent_map[aid], req_skills),
                                     dist(agent_map[aid].position, st.target) / max(getattr(fleet.kinematics.get(agent_map[aid].agent_type.value, None), "max_speed", 1.0), 1e-9)
                                     if hasattr(fleet, "kinematics") and fleet.kinematics and agent_map[aid].agent_type.value in fleet.kinematics
                                     else dist(agent_map[aid].position, st.target),
@@ -432,7 +496,9 @@ class PlanContinuityEngine:
                                     if validate_joint_assignment([aid1, aid2], st, fleet, self.c_task, self.r_reach):
                                         d1 = dist(agent_map[aid1].position, st.target)
                                         d2 = dist(agent_map[aid2].position, st.target)
-                                        cost = d1 + d2
+                                        aff1 = domain_skill_affinity(agent_map[aid1], req_skills)
+                                        aff2 = domain_skill_affinity(agent_map[aid2], req_skills)
+                                        cost = (aff1 + aff2) * 100.0 + d1 + d2
                                         if cost < best_pair_cost:
                                             best_pair_cost = cost
                                             best_pair = [aid1, aid2]
@@ -474,7 +540,7 @@ class PlanContinuityEngine:
         packet_loss: float = 0.0,
         latency: float = 0.0,
     ) -> bool:
-        """Return True if active plan validity score exceeds threshold."""
+        """Return True if active plan validity score exceeds threshold and satisfies capacity."""
         if self.active_context is None:
             return False
 
@@ -485,6 +551,19 @@ class PlanContinuityEngine:
             return False
 
         # Dynamically refresh Layer 2 execution assignments for incomplete subtasks
-        self.get_updated_executable_assignments(fleet, subtasks)
+        updated = self.get_updated_executable_assignments(fleet, subtasks)
+
+        # Revalidate that no two incomplete subtasks share an agent and all incomplete subtasks have assignments
+        seen_agents: set[str] = set()
+        incomplete_sids = {s.subtask_id for s in subtasks if not s.completed}
+        for sid in incomplete_sids:
+            aids = updated.get(sid, [])
+            if not aids:
+                return False
+            for aid in aids:
+                if aid in seen_agents:
+                    return False
+                seen_agents.add(aid)
+
         return True
 

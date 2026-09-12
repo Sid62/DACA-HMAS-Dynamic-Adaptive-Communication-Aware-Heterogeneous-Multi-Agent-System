@@ -128,6 +128,24 @@ def compute_tfr(
         return 0.0
     return feasible / assigned
 
+def domain_skill_affinity(agent: AgentState, required_skills: set[str]) -> int:
+    """Return preference rank (0=preferred specialized domain, 1=neutral, 2=dispreferred).
+    
+    Logistics/Heterogeneous role alignment:
+    - Tasks requiring 'lift' must access a robot.
+    - Tasks requiring 'navigate' and 'sense' prefer UAVs.
+    - Tasks requiring 'navigate' and 'transport' prefer vehicles.
+    - Tasks requiring 'lift' and 'transport' prefer robots with transport capability.
+    """
+    atype = agent.agent_type.value
+    if "lift" in required_skills:
+        return 0 if atype == "robot" else 2
+    if {"navigate", "sense"}.issubset(required_skills):
+        return 0 if atype == "uav" else 1
+    if {"navigate", "transport"}.issubset(required_skills):
+        return 0 if atype == "vehicle" else 1
+    return 0
+
 
 @dataclass
 class DistanceFeasibleDecomposer:
@@ -259,7 +277,8 @@ class DistanceFeasibleDecomposer:
             else:
                 norm_dist = min(d / self.r_reach, 1.0)
             wl = workload.get(agent.agent_id, 0)
-            return w_dist * norm_dist + (10.0 * wl)
+            affinity = domain_skill_affinity(agent, required)
+            return (affinity * 100.0) + (w_dist * norm_dist) + (10.0 * wl)
 
         # 1. Free single agent within r_reach covering all required skills
         free_singles_in_reach = [
@@ -270,6 +289,7 @@ class DistanceFeasibleDecomposer:
             best_single = min(
                 free_singles_in_reach,
                 key=lambda a: (
+                    domain_skill_affinity(a, required),
                     dist(a.position, subtask.target) / max(self._agent_speed(a, fleet), 1e-9),
                     a.agent_id,
                 ),
@@ -292,7 +312,9 @@ class DistanceFeasibleDecomposer:
                         v2 = self._agent_speed(a2, fleet)
                         eta1 = dist(a1.position, subtask.target) / v1 if v1 > 0 else float("inf")
                         eta2 = dist(a2.position, subtask.target) / v2 if v2 > 0 else float("inf")
-                        cost = max(eta1, eta2)
+                        aff1 = domain_skill_affinity(a1, required)
+                        aff2 = domain_skill_affinity(a2, required)
+                        cost = (aff1 + aff2) * 100.0 + max(eta1, eta2)
                         pair_ids = sorted([a1.agent_id, a2.agent_id])
                         if cost < best_free_pair_cost or (cost == best_free_pair_cost and best_free_pair is not None and pair_ids < best_free_pair):
                             best_free_pair_cost = cost
@@ -308,6 +330,7 @@ class DistanceFeasibleDecomposer:
             nearest_free = min(
                 free_singles_all,
                 key=lambda a: (
+                    domain_skill_affinity(a, required),
                     dist(a.position, subtask.target) / max(self._agent_speed(a, fleet), 1e-9),
                     a.agent_id,
                 ),
@@ -328,7 +351,9 @@ class DistanceFeasibleDecomposer:
                     v2 = self._agent_speed(a2, fleet)
                     eta1 = dist(a1.position, subtask.target) / v1 if v1 > 0 else float("inf")
                     eta2 = dist(a2.position, subtask.target) / v2 if v2 > 0 else float("inf")
-                    cost = max(eta1, eta2)
+                    aff1 = domain_skill_affinity(a1, required)
+                    aff2 = domain_skill_affinity(a2, required)
+                    cost = (aff1 + aff2) * 100.0 + max(eta1, eta2)
                     pair_ids = sorted([a1.agent_id, a2.agent_id])
                     if cost < best_free_pair_all_cost or (cost == best_free_pair_all_cost and best_free_pair_all is not None and pair_ids < best_free_pair_all):
                         best_free_pair_all_cost = cost
@@ -366,7 +391,6 @@ class DistanceFeasibleDecomposer:
                         best_fallback_pair = pair_ids
         if best_fallback_pair:
             return best_fallback_pair
-
 
         # Strict: No agent or team can satisfy required skills
         return []

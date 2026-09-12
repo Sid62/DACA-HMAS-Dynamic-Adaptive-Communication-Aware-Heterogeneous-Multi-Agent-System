@@ -248,7 +248,7 @@ CONFIGS: dict[str, DACAConfig] = {
                      use_cqm=True, use_acds=True, use_handoff=False, use_reallocation=False),
     "A4": DACAConfig(name="A4", use_distance_decomp=False, use_coalition_feasibility=False,
                      use_cqm=True, use_acds=True, use_hysteresis=False, use_handoff=False, use_reallocation=False),
-    "A5": DACAConfig(name="A5", use_optimizations=True),
+    "A5": DACAConfig(name="A5", use_optimizations=True, experience_reuse=True, cache_responses=True),
     "A5_unopt": DACAConfig(name="A5_unopt", use_optimizations=False),
 }
 
@@ -781,6 +781,20 @@ class DACAOrchestrator:
                     assignments = dict(self.continuity_engine.active_context.assignments)
                     completed_sids = {s.subtask_id for s in self.env.subtask_list if s.completed} | self.continuity_engine.active_context.completed_subtask_ids
                     assignments = {sid: aids for sid, aids in assignments.items() if sid not in completed_sids}
+                    # Capacity audit: check if any duplicate agents or unassigned incomplete tasks exist
+                    seen_aids = set()
+                    dup_found = False
+                    for sid, aids in assignments.items():
+                        for aid in aids:
+                            if aid in seen_aids:
+                                dup_found = True
+                                break
+                            seen_aids.add(aid)
+                        if dup_found:
+                            break
+                    if dup_found:
+                        print(f"[REPLAN] Capacity violation in cached plan -- refreshing executable assignments")
+                        assignments = self.continuity_engine.get_updated_executable_assignments(fleet, self.env.subtask_list)
                     if mode == 0 and assignments != self.centralized._last_dispatched_assignments:
                         self.centralized._dispatch_domains(coalitions)
                         self.centralized._last_dispatched_assignments = dict(assignments)
@@ -810,7 +824,16 @@ class DACAOrchestrator:
             agent_assignments = {}
             for sid, agents in list(assignments.items()):
                 for aid in agents:
-                    agent_assignments[aid] = sid
+                    if aid in agent_assignments:
+                        prev_sid = agent_assignments[aid]
+                        prev_st = next((s for s in self.env.subtask_list if s.subtask_id == prev_sid), None)
+                        curr_st = next((s for s in self.env.subtask_list if s.subtask_id == sid), None)
+                        d_prev = dist(fleet.get_agent(aid).position, prev_st.target) if prev_st else float("inf")
+                        d_curr = dist(fleet.get_agent(aid).position, curr_st.target) if curr_st else float("inf")
+                        if d_curr < d_prev:
+                            agent_assignments[aid] = sid
+                    else:
+                        agent_assignments[aid] = sid
 
             t_sim_body = time.perf_counter()
             self.ca_transfer.step(self.env.fleet, mode, agent_assignments, targets)
@@ -850,9 +873,9 @@ class DACAOrchestrator:
             if step % 20 == 0:
                 print(
                     f"[MISSION] Step={step} "
-                    f"Completed={self.env.success_rate():.2f}% "
+                    f"Completed={self.env.success_rate() * 100.0:.2f}% "
                     f"MissionDone={self.env.state.mission_complete}"
-       )
+                )
             if self.env.state.mission_complete:
                 break
         

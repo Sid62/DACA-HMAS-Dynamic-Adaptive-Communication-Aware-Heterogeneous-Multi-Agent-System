@@ -256,6 +256,8 @@ class DecentralizedHybridCoordinator:
             for sid, agents in assignments_map.items()
             if any(a in members for a in agents)
         ]
+        if not coalition_subtasks:
+            return shared
 
         participant_domains = domains_in_coalition(members, env.fleet)
         capability_provider_domains: set[str] = set()
@@ -382,17 +384,28 @@ class DecentralizedHybridCoordinator:
         pm.record_consensus_round(time.perf_counter() - t0)
         return shared
 
-    def _closer_domain_mate(self, agent_id, target, fleet, domain, current_dist):
+    def _closer_domain_mate(
+        self,
+        agent_id: str,
+        target: Any,
+        fleet: AgentFleet,
+        domain: str,
+        current_dist: float,
+        occupied_agents: set[str] | None = None,
+        r_reach: float = 100.0,
+    ) -> str | None:
         domain_map = discover_agent_type_domains(fleet)
         best_id, best_dist = None, current_dist
+        if occupied_agents is None:
+            occupied_agents = set()
         for aid in domain_map.get(domain, []):
-            if aid == agent_id:
+            if aid == agent_id or aid in occupied_agents:
                 continue
             agent = fleet.get_agent(aid)
             if agent is None:
                 continue
             d = dist(agent.position, target)
-            if d < best_dist * 0.8:
+            if d <= r_reach and d < best_dist * 0.8:
                 best_id, best_dist = aid, d
         return best_id
 
@@ -403,9 +416,12 @@ class DecentralizedHybridCoordinator:
         coalitions: list[dict[str, Any]],
         cqi_matrix: np.ndarray,
     ) -> None:
+        from src.decomposition.distance_feasible_decomp import validate_joint_assignment, validate_assignment_skills
+
         fleet = env.fleet
         live_agent_ids = {a.agent_id for a in fleet.agents}
         targets = {s.subtask_id: s.target for s in env.subtask_list}
+        subtask_map = {s.subtask_id: s for s in env.subtask_list}
         domain_map = discover_agent_type_domains(fleet)
         agent_domain = {aid: d for d, ids in domain_map.items() for aid in ids}
         coalition_members_by_id = {
@@ -417,8 +433,17 @@ class DecentralizedHybridCoordinator:
             and float(np.mean(self.peer_manager.domain_cqi_matrix)) < 0.5
         )
 
-        for sid, agent_list in assignments_map.items():
+        c_task = 30.0
+        r_reach = 100.0
+        if self.decomposer is not None:
+            c_task = getattr(self.decomposer, "c_task", 30.0)
+            r_reach = getattr(self.decomposer, "r_reach", 100.0)
+
+        for sid, agent_list in list(assignments_map.items()):
             if not agent_list:
+                continue
+            st = subtask_map.get(sid)
+            if st is None or st.completed:
                 continue
             current_agent = agent_list[0]
             target = targets.get(sid)
@@ -428,13 +453,35 @@ class DecentralizedHybridCoordinator:
             if domain is None:
                 continue
 
+            # Agents currently occupied by other uncompleted subtasks
+            occupied_by_others = {
+                aid
+                for other_sid, aids in assignments_map.items()
+                if other_sid != sid and other_sid in subtask_map and not subtask_map[other_sid].completed
+                for aid in aids
+            }
+
             reason = None
+            new_agent = None
+
             if current_agent not in live_agent_ids:
                 reason = "agent_unavailable"
             else:
+                is_curr_feasible = validate_joint_assignment(agent_list, st, fleet, c_task=c_task, r_reach=r_reach)
                 current_dist = dist(fleet.get_agent(current_agent).position, target)
-                if self._closer_domain_mate(current_agent, target, fleet, domain, current_dist):
-                    reason = "closer_neighbor"
+                
+                # Check for closer unoccupied domain mate
+                closer = self._closer_domain_mate(
+                    current_agent, target, fleet, domain, current_dist,
+                    occupied_agents=occupied_by_others, r_reach=r_reach
+                )
+                if closer is not None:
+                    cand_team = [closer if a == current_agent else a for a in agent_list]
+                    if validate_joint_assignment(cand_team, st, fleet, c_task=c_task, r_reach=r_reach):
+                        reason = "closer_neighbor"
+                        new_agent = closer
+                elif not is_curr_feasible:
+                    reason = "assignment_infeasible"
                 elif sys_cqi_poor:
                     reason = "poor_cloud_comm"
 
@@ -445,21 +492,30 @@ class DecentralizedHybridCoordinator:
             if cid is not None and (coalition_members_by_id.get(cid, set()) - live_agent_ids):
                 reason = reason or "coalition_broken"
 
-            if reason and reason != "poor_cloud_comm":
-                candidates = [a for a in domain_map.get(domain, []) if a in live_agent_ids]
+            if reason and reason != "poor_cloud_comm" and new_agent is None:
+                candidates = [
+                    a for a in domain_map.get(domain, [])
+                    if a in live_agent_ids and a not in occupied_by_others
+                ]
                 if not candidates:
                     continue
-                new_agent = min(
-                    candidates, key=lambda aid: dist(fleet.get_agent(aid).position, target)
-                )
-                if new_agent != current_agent:
-                    cand_team = [new_agent if a == current_agent else a for a in agent_list]
-                    st = next((s for s in env.subtask_list if s.subtask_id == sid), None)
-                    from src.decomposition.distance_feasible_decomp import validate_assignment_skills
-                    if st is None or validate_assignment_skills(cand_team, st, fleet):
-                        assignments_map[sid] = cand_team
-                        self.local_reallocation_count += 1
-                        print(f"[LOCAL-REALLOC] {sid}: {current_agent} -> {new_agent} ({reason})")
+
+                # Filter to skill and distance feasible candidates
+                feasible_candidates = [
+                    a for a in candidates
+                    if validate_joint_assignment([a if x == current_agent else x for x in agent_list], st, fleet, c_task=c_task, r_reach=r_reach)
+                ]
+                if feasible_candidates:
+                    new_agent = min(
+                        feasible_candidates,
+                        key=lambda aid: dist(fleet.get_agent(aid).position, target),
+                    )
+
+            if new_agent is not None and new_agent != current_agent:
+                cand_team = [new_agent if a == current_agent else a for a in agent_list]
+                assignments_map[sid] = cand_team
+                self.local_reallocation_count += 1
+                print(f"[LOCAL-REALLOC] {sid}: {current_agent} -> {new_agent} ({reason})")
 
     def _try_experience_reuse(
         self,
@@ -579,6 +635,13 @@ class DecentralizedHybridCoordinator:
             for coalition in coalitions:
                 coalition_id = int(coalition.get("coalition_id", 0))
                 members = coalition.get("members", [])
+                coalition_subtasks = [
+                    sid
+                    for sid, agents in assignments_map.items()
+                    if any(a in members for a in agents)
+                ]
+                if not coalition_subtasks:
+                    continue
                 if not self._coalition_context_changed(
                     coalition_id, members, env, assignments_map
                 ):

@@ -17,7 +17,7 @@ for scenario in ["logistics", "search_rescue"]:
     )
     metrics = orch.run()
     print(f"\nResults for {scenario}:")
-    print(f"  success_rate: {metrics.success_rate:.2f}%")
+    print(f"  success_rate: {metrics.success_rate * 100.0:.2f}%")
     print(f"  steps: {metrics.steps}")
     print(f"  switch_count: {metrics.switch_count}")
     print(f"  peer_messages: {metrics.peer_messages}")
