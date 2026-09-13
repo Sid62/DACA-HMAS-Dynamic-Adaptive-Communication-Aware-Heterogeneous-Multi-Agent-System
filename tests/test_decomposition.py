@@ -14,7 +14,7 @@ def fleet_and_subtask():
         AgentState("a1", AgentType.ROBOT, Position(15, 15)),
     ]
     kin = {"uav": KinematicsConfig(15, 1.5), "vehicle": KinematicsConfig(10, 0.8),
-           "robot": KinematicsConfig(3, 2.0)}
+           "robot": KinematicsConfig(4.00, 2.0)}
     fleet = AgentFleet(agents, kin)
     subtask = Subtask("T_0", "test", Position(20, 20), ["navigate"])
     return fleet, subtask
