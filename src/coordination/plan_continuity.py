@@ -78,22 +78,13 @@ class PlanContinuityEngine:
         targets = {s.subtask_id: (s.target.x, s.target.y) for s in subtasks}
         skills = {s.subtask_id: set(s.required_skills) for s in subtasks}
         completed = {s.subtask_id for s in subtasks if s.completed}
-        # Enforce capacity constraint: no agent assigned to multiple active tasks
-        clean_assignments: dict[str, list[str]] = {}
-        seen_agents: set[str] = set()
-        for sid, aids in assignments.items():
-            if sid in completed:
-                clean_assignments[sid] = list(aids)
-                continue
-            unique_aids = []
-            for aid in aids:
-                if aid not in seen_agents:
-                    unique_aids.append(aid)
-                    seen_agents.add(aid)
-            clean_assignments[sid] = unique_aids
+        # Preserve the accepted global plan baseline as an immutable continuity baseline.
+        # Do NOT strip agents from the accepted plan into empty lists; execution-layer
+        # duplicate handling is performed separately during local assignment refresh.
+        baseline_assignments = {sid: list(aids) for sid, aids in assignments.items()}
 
         self.active_context = ActivePlanContext(
-            assignments=clean_assignments,
+            assignments=baseline_assignments,
             coalitions=list(coalitions),
             completed_subtask_ids=completed,
             subtask_targets=targets,
@@ -137,7 +128,7 @@ class PlanContinuityEngine:
             )
 
         # ── Hard Feasibility Gates before weighted scoring ────────────────────
-        from src.decomposition.distance_feasible_decomp import validate_joint_assignment
+        from src.decomposition.distance_feasible_decomp import validate_assignment_skills
 
         agent_map = {a.agent_id: a for a in fleet.agents}
         assigned_agents_seen: set[str] = set()
@@ -145,18 +136,9 @@ class PlanContinuityEngine:
         for s in incomplete_subtasks:
             sid = s.subtask_id
             assigned = ctx.assignments.get(sid, [])
-            # 1. Non-empty assignment
             if not assigned:
-                return PlanValidityScore(
-                    task_completion_score=0.0,
-                    distance_feasibility_score=0.0,
-                    communication_quality_score=0.0,
-                    coalition_feasibility_score=0.0,
-                    resource_network_score=0.0,
-                    total_validity_score=0.0,
-                    validity_threshold=self.validity_threshold,
-                )
-            # 2. Known agent IDs
+                continue
+            # 1. Known agent IDs (agent genuinely unavailable / missing from fleet)
             if any(aid not in agent_map for aid in assigned):
                 return PlanValidityScore(
                     task_completion_score=0.0,
@@ -167,9 +149,32 @@ class PlanContinuityEngine:
                     total_validity_score=0.0,
                     validity_threshold=self.validity_threshold,
                 )
-            # 3. No agent assigned to multiple incomplete tasks
+            # 2. Required skills coverage (hard constraint)
+            if not validate_assignment_skills(assigned, s, fleet):
+                return PlanValidityScore(
+                    task_completion_score=0.0,
+                    distance_feasibility_score=0.0,
+                    communication_quality_score=0.0,
+                    coalition_feasibility_score=0.0,
+                    resource_network_score=0.0,
+                    total_validity_score=0.0,
+                    validity_threshold=self.validity_threshold,
+                )
+            # 3. Severe distance / reach impossibility
+            agents = [agent_map[aid] for aid in assigned if aid in agent_map]
+            if any(dist(a.position, s.target) > 2.0 * self.r_reach for a in agents):
+                return PlanValidityScore(
+                    task_completion_score=0.0,
+                    distance_feasibility_score=0.0,
+                    communication_quality_score=0.0,
+                    coalition_feasibility_score=0.0,
+                    resource_network_score=0.0,
+                    total_validity_score=0.0,
+                    validity_threshold=self.validity_threshold,
+                )
+            # 4. Duplicate agent conflict across active tasks (hard gate when fleet has capacity)
             for aid in assigned:
-                if aid in assigned_agents_seen:
+                if aid in assigned_agents_seen and len(incomplete_subtasks) <= len(agent_map):
                     return PlanValidityScore(
                         task_completion_score=0.0,
                         distance_feasibility_score=0.0,
@@ -180,17 +185,6 @@ class PlanContinuityEngine:
                         validity_threshold=self.validity_threshold,
                     )
                 assigned_agents_seen.add(aid)
-            # 4. Required skills satisfied & joint distance feasibility passes
-            if not validate_joint_assignment(assigned, s, fleet, self.c_task, self.r_reach):
-                return PlanValidityScore(
-                    task_completion_score=0.0,
-                    distance_feasibility_score=0.0,
-                    communication_quality_score=0.0,
-                    coalition_feasibility_score=0.0,
-                    resource_network_score=0.0,
-                    total_validity_score=0.0,
-                    validity_threshold=self.validity_threshold,
-                )
 
         # 1. Task Completion Alignment
         valid_assignments = 0
@@ -444,7 +438,7 @@ class PlanContinuityEngine:
             curr_agents = list(raw_agents)
             if (
                 curr_agents
-                and validate_joint_assignment(curr_agents, s, fleet, self.c_task, self.r_reach)
+                and validate_assignment_skills(curr_agents, s, fleet)
                 and not any(aid in assigned_agents for aid in curr_agents)
             ):
                 updated_assignments[sid] = curr_agents
@@ -522,11 +516,10 @@ class PlanContinuityEngine:
         for sid, agents in list(updated_assignments.items()):
             if agents:
                 st = next((s for s in incomplete_subtasks if s.subtask_id == sid), None)
-                if not st or not validate_joint_assignment(agents, st, fleet, self.c_task, self.r_reach):
+                if not st or not validate_assignment_skills(agents, st, fleet):
                     updated_assignments[sid] = []
 
-        # Update active context with newly updated execution assignments
-        ctx.assignments = updated_assignments
+        # Preserve active context baseline without mutating it with transient execution assignments
         ctx.completed_subtask_ids.update({s.subtask_id for s in subtasks if s.completed})
         return updated_assignments
 
@@ -540,30 +533,49 @@ class PlanContinuityEngine:
         packet_loss: float = 0.0,
         latency: float = 0.0,
     ) -> bool:
-        """Return True if active plan validity score exceeds threshold and satisfies capacity."""
+        """Return True if active global plan remains feasible and can continue execution."""
         if self.active_context is None:
             return False
 
+        # 1. Evaluate quantitative plan validity score
         score = self.evaluate_plan_validity(
             fleet, subtasks, cqi_matrix, sys_cqi, packet_loss, latency
         )
-        if not score.is_valid:
+
+        completed_ids = self.active_context.completed_subtask_ids | {
+            s.subtask_id for s in subtasks if s.completed
+        }
+        incomplete_subtasks = [
+            s for s in subtasks if s.subtask_id not in completed_ids and not s.completed
+        ]
+        if not incomplete_subtasks:
+            return True
+
+        from src.decomposition.distance_feasible_decomp import validate_assignment_skills
+
+        # 2. Check genuine mission-level invalidations:
+        # A required agent is genuinely unavailable or required skills cannot be covered
+        agent_map = {a.agent_id: a for a in fleet.agents}
+        for st in incomplete_subtasks:
+            assigned = self.active_context.assignments.get(st.subtask_id, [])
+            if assigned:
+                if any(aid not in agent_map for aid in assigned):
+                    return False
+                if not validate_assignment_skills(assigned, st, fleet):
+                    return False
+
+        # 3. Check if local execution repair can provide valid executable assignments
+        updated = self.get_updated_executable_assignments(fleet, subtasks)
+        has_executable_work = any(len(aids) > 0 for aids in updated.values())
+        if not has_executable_work and incomplete_subtasks:
             return False
 
-        # Dynamically refresh Layer 2 execution assignments for incomplete subtasks
-        updated = self.get_updated_executable_assignments(fleet, subtasks)
-
-        # Revalidate that no two incomplete subtasks share an agent and all incomplete subtasks have assignments
-        seen_agents: set[str] = set()
-        incomplete_sids = {s.subtask_id for s in subtasks if not s.completed}
-        for sid in incomplete_sids:
-            aids = updated.get(sid, [])
-            if not aids:
+        # 4. If evaluate_plan_validity failed for genuine network/resource or distance reasons:
+        if not score.is_valid:
+            if sys_cqi < self.cqi_min_threshold * 0.5 or packet_loss > 0.6:
                 return False
-            for aid in aids:
-                if aid in seen_agents:
-                    return False
-                seen_agents.add(aid)
+            if score.distance_feasibility_score == 0.0 and not has_executable_work:
+                return False
 
         return True
 

@@ -796,8 +796,17 @@ class DACAOrchestrator:
                         print(f"[REPLAN] Capacity violation in cached plan -- refreshing executable assignments")
                         assignments = self.continuity_engine.get_updated_executable_assignments(fleet, self.env.subtask_list)
                     if mode == 0 and assignments != self.centralized._last_dispatched_assignments:
-                        self.centralized._dispatch_domains(coalitions)
+                        active_coalitions = (
+                            self.continuity_engine.active_context.coalitions
+                            if self.continuity_engine is not None and self.continuity_engine.active_context is not None
+                            else coalitions
+                        )
+                        dispatch_occurred = self.centralized._dispatch_domains(active_coalitions)
+                        if dispatch_occurred:
+                            self.comm_counter.record_dispatch(1, "centralized_domain_dispatch")
                         self.centralized._last_dispatched_assignments = dict(assignments)
+                    elif mode == 0:
+                        self.centralized.dispatch_skipped_count += 1
 
             print(f"\n[ASSIGN] Step={step}")
             for sid, agents in list(assignments.items()):

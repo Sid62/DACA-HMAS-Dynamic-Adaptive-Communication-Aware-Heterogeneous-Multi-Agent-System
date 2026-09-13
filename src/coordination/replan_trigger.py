@@ -92,7 +92,20 @@ def should_replan(
                 return False, ""
         return True, f"architecture_switched:{plan_state.known_mode}->{mode}"
 
+    # --- Rate limiter: everything below this line is subject to the
+    # minimum replanning interval. Architecture switch above is exempt
+    # because it is a safety/consistency requirement, not an optimization
+    # decision -- executing the wrong coordinator for the current mode is
+    # not something a cooldown should ever suppress.
+    steps_since_replan = current_step - plan_state.last_replan_step
+    if minimum_replanning_interval > 0 and steps_since_replan < minimum_replanning_interval:
+        return False, ""
+
     # --- Trigger 1g: Active plan capacity violation (duplicate agents across tasks) ---
+    # Subject to minimum_replanning_interval cooldown. A duplicate-agent assignment
+    # must first be treated as a potentially local execution-layer problem. If the
+    # assignment can be repaired locally using the existing global plan, reuse the
+    # global plan without triggering Cloud planning.
     if continuity_engine is not None and continuity_engine.active_context is not None:
         active_assignments = continuity_engine.active_context.assignments
         incomplete_sids = {s.subtask_id for s in subtasks if not s.completed}
@@ -108,16 +121,10 @@ def should_replan(
             if capacity_violated:
                 break
         if capacity_violated:
-            return True, "active_plan_capacity_violation_duplicate_agent"
-    
-    # --- Rate limiter: everything below this line is subject to the
-    # minimum replanning interval. Architecture switch above is exempt
-    # because it is a safety/consistency requirement, not an optimization
-    # decision -- executing the wrong coordinator for the current mode is
-    # not something a cooldown should ever suppress.
-    steps_since_replan = current_step - plan_state.last_replan_step
-    if minimum_replanning_interval > 0 and steps_since_replan < minimum_replanning_interval:
-        return False, ""
+            repaired = continuity_engine.get_updated_executable_assignments(fleet, subtasks)
+            has_executable_work = any(len(aids) > 0 for aids in repaired.values())
+            if not has_executable_work:
+                return True, "active_plan_capacity_violation_duplicate_agent"
 
     # --- Trigger 1c: Communication quality changed significantly ----------
     # Filter high-frequency wireless noise using Exponential Moving Average (EMA)
