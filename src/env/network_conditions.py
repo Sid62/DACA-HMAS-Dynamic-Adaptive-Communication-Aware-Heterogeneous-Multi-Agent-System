@@ -208,6 +208,7 @@ class NetworkConditionGenerator:
             packet_loss_rate=loss,
             latency=latency,
             bandwidth_utilization=1.0 - bw_avail,
+            bytes_capacity=payload_bytes,
             # bytes_delivered represents offered channel throughput
             # (payload × available bandwidth fraction), NOT effective
             # delivered throughput. Delivery success/failure is captured
