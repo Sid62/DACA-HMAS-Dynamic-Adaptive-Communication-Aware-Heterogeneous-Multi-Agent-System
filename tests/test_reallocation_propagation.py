@@ -16,7 +16,7 @@ from src.reallocation.post_switch import PostSwitchReallocator
 KIN = {
     "uav": KinematicsConfig(15, 1.5),
     "vehicle": KinematicsConfig(10, 0.8),
-    "robot": KinematicsConfig(3, 2.0),
+    "robot": KinematicsConfig(4.00, 2.0),
 }
 
 
