@@ -232,9 +232,10 @@ class CentralizedHybridCoordinator:
                 continue
             subtask = next((s for s in env.subtask_list if s.subtask_id == sid), None)
             if subtask:
-                from src.coordination.constants import COMPLETION_RADIUS_M
+                from src.coordination.constants import get_completion_radius
                 from src.decomposition.distance_feasible_decomp import validate_task_completion
-                if validate_task_completion(agent_list, subtask, env.fleet, COMPLETION_RADIUS_M):
+                radius = get_completion_radius(getattr(env, "thresholds", None), getattr(env, "scenario_name", None))
+                if validate_task_completion(agent_list, subtask, env.fleet, radius):
                     env.mark_subtask_complete(sid)
                     if self.continuity_engine is not None:
                         self.continuity_engine.mark_subtask_completed(sid)

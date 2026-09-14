@@ -98,18 +98,22 @@ def test_fleet_agent_ids_deterministic(scenario_name, expected_ids):
 # ── Test 3: Inspection Sensor Position Overrides ──────────────────────────────
 
 def test_inspection_sensor_position_overrides():
+    from src.env.agents import dist
     th = get_thresholds()
     sc = get_scenario("inspection", th, seed=0)
     fleet = create_fleet_from_scenario(sc.agent_config, KIN, c1=50.0, c2=5.0, seed=0)
     
     # Robots start at index num_uav + num_vehicle = 3 + 2 = 5
-    # robot_5, robot_6, robot_7 are stationary sensor proxies placed at subtask targets
+    # robot_5, robot_6, robot_7 are sensor proxies placed near subtask targets
     for i in range(3):
         agent_id = f"robot_{5 + i}"
         agent = fleet.get_agent(agent_id)
         expected_target = sc.subtasks[i % len(sc.subtasks)].target
-        assert np.isclose(agent.position.x, expected_target.x)
-        assert np.isclose(agent.position.y, expected_target.y)
+        d = dist(agent.position, expected_target)
+        # Verify realistic small displacement: close to target (within 15m) but not exact overlap
+        assert 0.0 < d <= 15.0
+        assert np.isclose(agent.position.x, expected_target.x, atol=15.0)
+        assert np.isclose(agent.position.y, expected_target.y, atol=15.0)
 
 
 # ── Test 4: validate_scenario_agent_balance reports zero severe imbalance ─────

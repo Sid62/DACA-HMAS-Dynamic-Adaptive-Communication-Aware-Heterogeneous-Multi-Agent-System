@@ -89,7 +89,7 @@ def validate_task_completion(
     agent_ids: list[str],
     subtask: Subtask,
     fleet: AgentFleet,
-    completion_radius: float = 8.0,
+    completion_radius: float | None = None,
 ) -> bool:
     """Validate that the assigned team is valid, covers all required skills,
     and all assigned agents are within completion_radius of the target."""
@@ -97,6 +97,10 @@ def validate_task_completion(
         return False
     if not validate_assignment_skills(agent_ids, subtask, fleet):
         return False
+
+    if completion_radius is None:
+        from src.coordination.constants import get_completion_radius
+        completion_radius = get_completion_radius()
 
     for aid in agent_ids:
         agent = fleet.get_agent(aid)

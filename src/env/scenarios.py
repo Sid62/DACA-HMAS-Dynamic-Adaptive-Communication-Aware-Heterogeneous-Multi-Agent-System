@@ -13,9 +13,12 @@ Scenario semantics are derived from AutoHMA-LLM Section V-A:
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any
 import zlib
+
+import numpy as np
 
 from src.env.agents import Position
 
@@ -157,8 +160,11 @@ def build_inspection_scenario(cfg: dict[str, Any], seed: int = 0) -> Scenario:
 
     # Compute position overrides for robot (sensor) agents.
     # Robots are the third agent group; their IDs start after UAVs + vehicles.
-    # Each sensor is placed at the target of a subtask it will monitor.
+    # Each sensor is placed close to the target of a subtask it will monitor,
+    # with a small realistic displacement so that it is not exactly on the target.
     robot_start_idx = num_uav + num_vehicle
+    sensor_offset = float(ac.get("sensor_offset", 8.0))
+    offset_rng = np.random.default_rng(zlib.crc32(b"inspection_sensor_offset") % 2**31 + seed)
     position_overrides = {}
     for i in range(num_robot):
         agent_id = f"robot_{robot_start_idx + i}"
@@ -166,7 +172,14 @@ def build_inspection_scenario(cfg: dict[str, Any], seed: int = 0) -> Scenario:
         # than subtasks, though the default config has 3 sensors / 8 tasks).
         subtask_idx = i % len(subtasks)
         target = subtasks[subtask_idx].target
-        position_overrides[agent_id] = {"x": target.x, "y": target.y}
+        if sensor_offset > 0:
+            angle = float(offset_rng.uniform(0, 2 * math.pi))
+            r = float(offset_rng.uniform(sensor_offset * 0.9, sensor_offset * 1.25))
+            ox = float(np.clip(target.x + r * math.cos(angle), 0.0, 200.0))
+            oy = float(np.clip(target.y + r * math.sin(angle), 0.0, 200.0))
+            position_overrides[agent_id] = {"x": ox, "y": oy}
+        else:
+            position_overrides[agent_id] = {"x": target.x, "y": target.y}
 
     return Scenario(
         name="inspection",

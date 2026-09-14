@@ -855,8 +855,9 @@ class DACAOrchestrator:
                 )
                 if subtask:
                     from src.decomposition.distance_feasible_decomp import validate_task_completion
-                    from src.coordination.constants import COMPLETION_RADIUS_M
-                    if validate_task_completion(agent_list, subtask, fleet, COMPLETION_RADIUS_M):
+                    from src.coordination.constants import get_completion_radius
+                    radius = get_completion_radius(self.thresholds, self.scenario)
+                    if validate_task_completion(agent_list, subtask, fleet, radius):
                         was_completed = subtask.completed
                         self.env.mark_subtask_complete(sid)
                         if self.continuity_engine is not None:

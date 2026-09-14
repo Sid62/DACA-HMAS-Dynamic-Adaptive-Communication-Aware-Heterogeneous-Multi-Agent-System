@@ -3,6 +3,7 @@ C1: 50.0              # communication range (meters)
 C_task: 30.0          # subtask collaboration range (meters)
 R_reach: 100.0        # agent reach to subtask target (meters)
 C2: 5.0               # collision avoidance threshold (meters)
+completion_radius: 6.0 # task completion distance threshold (meters)
 
 # CQM weights (Eq 18)
 cqi_weights:
@@ -58,13 +59,13 @@ optimizations:
 # Agent kinematics
 kinematics:
   uav:
-    max_speed: 15.0
+    max_speed: 13.0
     max_turn_rate: 1.5
   vehicle:
-    max_speed: 10.0
+    max_speed: 9.0
     max_turn_rate: 0.8
   robot:
-    max_speed: 4.35
+    max_speed: 4.25
     max_turn_rate: 2.0
 
 # CA transfer overlap window (Eq 30)
@@ -86,6 +87,7 @@ scenarios:
     num_subtasks: 8
     comm_delay_prob: 0.10
     packet_loss_rate: 0.01
+    sensor_offset: 8.0
   search_rescue:
     num_uav: 3
     num_vehicle: 3
