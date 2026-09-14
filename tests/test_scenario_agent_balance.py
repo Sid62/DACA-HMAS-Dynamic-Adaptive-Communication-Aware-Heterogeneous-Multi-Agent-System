@@ -110,10 +110,10 @@ def test_inspection_sensor_position_overrides():
         agent = fleet.get_agent(agent_id)
         expected_target = sc.subtasks[i % len(sc.subtasks)].target
         d = dist(agent.position, expected_target)
-        # Verify realistic small displacement: close to target (within 15m) but not exact overlap
-        assert 0.0 < d <= 15.0
-        assert np.isclose(agent.position.x, expected_target.x, atol=15.0)
-        assert np.isclose(agent.position.y, expected_target.y, atol=15.0)
+        # Verify realistic small displacement: close to target (within 20m) but not exact overlap
+        assert 0.0 < d <= 20.0
+        assert np.isclose(agent.position.x, expected_target.x, atol=20.0)
+        assert np.isclose(agent.position.y, expected_target.y, atol=20.0)
 
 
 # ── Test 4: validate_scenario_agent_balance reports zero severe imbalance ─────

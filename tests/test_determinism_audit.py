@@ -14,6 +14,8 @@ def test_end_to_end_determinism_same_seed(tmp_path):
     )
     orch1.cloud_llm.config["use_mock"] = True
     orch1.cloud_llm.config["cache_dir"] = str(tmp_path / "c1")
+    if hasattr(orch1, "experience_store") and orch1.experience_store is not None:
+        orch1.experience_store.store_path = str(tmp_path / "exp1.json")
     for dc in orch1.device_llms.values():
         dc.config["use_mock"] = True
         dc.config["cache_dir"] = str(tmp_path / "c1")
@@ -28,6 +30,8 @@ def test_end_to_end_determinism_same_seed(tmp_path):
     )
     orch2.cloud_llm.config["use_mock"] = True
     orch2.cloud_llm.config["cache_dir"] = str(tmp_path / "c2")
+    if hasattr(orch2, "experience_store") and orch2.experience_store is not None:
+        orch2.experience_store.store_path = str(tmp_path / "exp2.json")
     for dc in orch2.device_llms.values():
         dc.config["use_mock"] = True
         dc.config["cache_dir"] = str(tmp_path / "c2")

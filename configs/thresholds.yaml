@@ -87,7 +87,7 @@ scenarios:
     num_subtasks: 8
     comm_delay_prob: 0.10
     packet_loss_rate: 0.01
-    sensor_offset: 8.0
+    sensor_offset: 12.0
   search_rescue:
     num_uav: 3
     num_vehicle: 3
