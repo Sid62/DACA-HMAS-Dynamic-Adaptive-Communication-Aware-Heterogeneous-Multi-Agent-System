@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+import random
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -513,6 +514,8 @@ class DACAOrchestrator:
         print(inspect.getfile(self.__class__))
         self.metadata = self.get_experiment_metadata()
         start = time.perf_counter()
+        random.seed(self.seed)
+        np.random.seed(self.seed)
         self.env.reset()
         self.comm_counter.reset()
         self.cloud_llm.usage.reset()
