@@ -432,3 +432,49 @@ def test_r_different_seeds_scenarios(tmp_path):
     assert m2.device_api_calls == m2.device_planning_calls
     assert m1.api_calls == m1.cloud_planning_calls + m1.device_planning_calls
     assert m2.api_calls == m2.cloud_planning_calls + m2.device_planning_calls
+
+
+# ── Section 11 Explicit Tests 1 to 5 ─────────────────────────────────────────
+def test_1_one_uncached_cloud_execution():
+    client = CloudLLMClient(config={"use_mock": True, "cache_responses": False})
+    client.complete("Planning prompt 1")
+    assert client.usage.cloud_planning_calls == 1
+
+
+def test_2_two_uncached_cloud_executions():
+    client = CloudLLMClient(config={"use_mock": True, "cache_responses": False})
+    client.complete("Planning prompt 1")
+    client.complete("Planning prompt 2")
+    assert client.usage.cloud_planning_calls == 2
+
+
+def test_3_cloud_cache_hit_no_increase(tmp_path):
+    client = CloudLLMClient(config={"use_mock": True, "cache_responses": True, "cache_dir": str(tmp_path)})
+    client.semantic_cache.enabled = False
+    client.complete("Planning prompt 1")
+    assert client.usage.cloud_planning_calls == 1
+    # Cache hit
+    client.complete("Planning prompt 1")
+    assert client.usage.cloud_planning_calls == 1
+
+
+def test_4_existing_runtime_replan_increases_by_one():
+    client = CloudLLMClient(config={"use_mock": True, "cache_responses": False})
+    client.semantic_cache.enabled = False
+    coord = CentralizedHybridCoordinator(cloud_llm=client)
+    env = _create_mock_env()
+    coord.plan(env, force_replan=True, replan_reason="mission_initialization")
+    initial_calls = client.usage.cloud_planning_calls
+    coord.plan(env, force_replan=True, replan_reason="task_reassignment", invalid_artifacts={"decomposition"})
+    assert client.usage.cloud_planning_calls == initial_calls + 1
+
+
+def test_5_no_cloud_execution_no_increase():
+    client = CloudLLMClient(config={"use_mock": True, "cache_responses": False})
+    coord = CentralizedHybridCoordinator(cloud_llm=client)
+    env = _create_mock_env()
+    coord.plan(env, force_replan=True, replan_reason="mission_initialization")
+    calls_after_init = client.usage.cloud_planning_calls
+    coord.plan(env, force_replan=False)
+    assert client.usage.cloud_planning_calls == calls_after_init
+
