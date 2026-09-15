@@ -570,12 +570,9 @@ class PlanContinuityEngine:
         if not has_executable_work and incomplete_subtasks:
             return False
 
-        # 4. If evaluate_plan_validity failed for genuine network/resource or distance reasons:
+        # 4. Quantitative Plan Validity check:
         if not score.is_valid:
-            if sys_cqi < self.cqi_min_threshold * 0.5 or packet_loss > 0.6:
-                return False
-            if score.distance_feasibility_score == 0.0 and not has_executable_work:
-                return False
+            return False
 
         return True
 

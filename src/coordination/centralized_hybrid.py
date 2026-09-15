@@ -139,76 +139,133 @@ class CentralizedHybridCoordinator:
         self,
         env: DACAEnv,
         cqi_matrix: np.ndarray | None = None,
+        force_replan: bool = False,
+        replan_reason: str | None = None,
     ) -> tuple[dict[str, list[str]], list[dict], bool, bool]:
         """Plan and dispatch.
 
+        Args:
+            env: Current DACA simulation environment.
+            cqi_matrix: Current inter-agent communication quality matrix.
+            force_replan: If True, indicates an approved global replan decision
+                          from should_replan() that must not be vetoed by continuity.
+            replan_reason: Triggering reason string for selective replanning.
+
         Returns:
             (assignments, coalitions, cloud_reasoned, dispatch_occurred)
-            dispatch_occurred is False only when plan continuity reuses
-            assignments identical to the last dispatch — suppressing
-            the actual Device LLM dispatch calls, not just the counter.
         """
         fleet = env.fleet
         subtasks = env.subtask_list
+        # Plan Continuity Check: ONLY perform when force_replan is False
+        # (standalone/untriggered call). If force_replan is True, an authoritative
+        # replan decision was already confirmed and must reach the Cloud planner.
+        if not force_replan:
+            if self.continuity_engine is not None and self.continuity_engine.active_context is not None:
+                if self.continuity_engine.can_continue_plan(fleet, subtasks, cqi_matrix):
+                    print("[PLAN-CONTINUITY] Centralized reusing valid active plan with updated assignments (0 LLM calls)")
+                    assignments = self.continuity_engine.get_updated_executable_assignments(fleet, subtasks)
+                    coalitions = self.continuity_engine.active_context.coalitions
+                    if assignments != self._last_dispatched_assignments:
+                        dispatch_occurred = self._dispatch_domains(coalitions)
+                        self._last_dispatched_assignments = dict(assignments)
+                        print("[DELTA-DISPATCH] Continuity plan has changed assignments — dispatching")
+                        return assignments, coalitions, False, dispatch_occurred
+                    else:
+                        self.dispatch_skipped_count += 1
+                        print("[DELTA-DISPATCH] Assignments unchanged — skipping redundant dispatch")
+                        return assignments, coalitions, False, False
 
-        # Plan Continuity Check: If active plan remains valid, continue execution!
-        if self.continuity_engine is not None and self.continuity_engine.active_context is not None:
-            if self.continuity_engine.can_continue_plan(fleet, subtasks, cqi_matrix):
-                print("[PLAN-CONTINUITY] Centralized reusing valid active plan with updated assignments (0 LLM calls)")
-                assignments = self.continuity_engine.get_updated_executable_assignments(fleet, subtasks)
-                coalitions = self.continuity_engine.active_context.coalitions
-                # Delta dispatch: only re-dispatch if assignments actually changed
-                if assignments != self._last_dispatched_assignments:
-                    dispatch_occurred = self._dispatch_domains(coalitions)
-                    self._last_dispatched_assignments = dict(assignments)
-                    print("[DELTA-DISPATCH] Continuity plan has changed assignments — dispatching")
-                    return assignments, coalitions, False, dispatch_occurred
-                else:
-                    self.dispatch_skipped_count += 1
-                    print("[DELTA-DISPATCH] Assignments unchanged — skipping redundant dispatch")
-                    return assignments, coalitions, False, False
-
-
-        obs = env.get_observation()
+        obs = env.get_observation() if hasattr(env, "get_observation") else {
+            "instruction": "Decompose mission into task assignments.",
+            "agents": fleet.to_dict_list(),
+            "subtasks": [{"id": s.subtask_id, "skills": s.required_skills, "target": [s.target.x, s.target.y]} for s in subtasks],
+        }
         dist_mat = distance_matrix(fleet.agents)
         if cqi_matrix is None:
             cqi_matrix = np.ones(dist_mat.shape)
 
+        # --- Event-Driven Selective Cloud Replanning ---
+        # Determine whether decomposition, coalition formation, or both require Cloud reasoning.
+        effective_reason = str(replan_reason or "").lower()
+        is_initial = (
+            "mission_initialization" in effective_reason
+            or (self.continuity_engine is not None and self.continuity_engine.active_context is None)
+            or (not self._last_dispatched_assignments and not getattr(self.cloud_llm, "_last_assignments", {}))
+        )
+        is_reassign_only = (
+            "task_completed_needs_reassignment" in effective_reason
+            or "new_subtask_discovered" in effective_reason
+        )
+        is_comm_only = (
+            "cqi_changed_significantly" in effective_reason
+            or "packet_loss_crossed_threshold" in effective_reason
+            or "latency_crossed_threshold" in effective_reason
+            or "coalition_invalidated" in effective_reason
+            or "coalition_membership_changed" in effective_reason
+        )
+
         reused_assignments = self._try_experience_reuse(env, fleet, subtasks)
         pending_subtasks = [s for s in subtasks if not s.completed and s.subtask_id not in reused_assignments]
 
-        if reused_assignments and not pending_subtasks:
-            print("[EXPERIENCE-REUSE] Centralized reusing validated experience store assignments for all subtasks (0 LLM decomp calls)")
-            assignments_map = reused_assignments
+        need_decompose = is_initial or is_reassign_only or (not is_comm_only)
+        need_coalitions = is_initial or is_comm_only or (not is_reassign_only)
+
+        # 1. Task Decomposition / Reassignment
+        if need_decompose:
+            if reused_assignments and not pending_subtasks:
+                print("[EXPERIENCE-REUSE] Centralized reusing validated experience store assignments for all subtasks (0 LLM decomp calls)")
+                assignments_map = reused_assignments
+            else:
+                target_subtasks = pending_subtasks if not is_initial else subtasks
+                if self.use_distance_decomp and self.decomposer:
+                    assignments_map = self.decomposer.decompose(
+                        obs["instruction"], fleet, target_subtasks
+                    )
+                else:
+                    assignments_map = self.cloud_llm.decompose(
+                        obs["instruction"],
+                        obs["agents"],
+                        [{"id": s.subtask_id, "skills": s.required_skills, "target": [s.target.x, s.target.y]} for s in target_subtasks],
+                    )
+                if reused_assignments:
+                    assignments_map.update(reused_assignments)
         else:
-            if self.use_distance_decomp and self.decomposer:
-                assignments_map = self.decomposer.decompose(
-                    obs["instruction"], fleet, subtasks
+            # Reuse valid existing assignments (Optimization F)
+            print("[SELECTIVE-REPLAN] Preserving valid task assignments, refreshing coalitions only")
+            if self.continuity_engine is not None and self.continuity_engine.active_context is not None:
+                assignments_map = self.continuity_engine.get_updated_executable_assignments(fleet, subtasks)
+            else:
+                assignments_map = dict(self._last_dispatched_assignments)
+
+        # 2. Coalition Formation / Refinement
+        if need_coalitions:
+            if self.use_coalition_feasibility and self.coalition_formation:
+                coalitions = self.coalition_formation.form(
+                    fleet, subtasks, dist_mat, cqi_matrix
                 )
             else:
-                assignments_map = self.cloud_llm.decompose(
-                    obs["instruction"],
-                    obs["agents"],
-                    obs["subtasks"],
+                coalitions = self.cloud_llm.form_coalitions(
+                    obs["subtasks"], obs["agents"],
+                    distance_matrix=dist_mat.tolist(),
+                    cqi_matrix=cqi_matrix.tolist(),
                 )
-            if reused_assignments:
-                assignments_map.update(reused_assignments)
-
-        if self.use_coalition_feasibility and self.coalition_formation:
-            coalitions = self.coalition_formation.form(
-                fleet, subtasks, dist_mat, cqi_matrix
-            )
         else:
-            coalitions = self.cloud_llm.form_coalitions(
-                obs["subtasks"], obs["agents"]
-            )
+            # Reuse valid existing coalitions (Optimization F)
+            print("[SELECTIVE-REPLAN] Preserving valid coalition structure, refreshing assignments only")
+            if self.continuity_engine is not None and self.continuity_engine.active_context is not None:
+                coalitions = list(self.continuity_engine.active_context.coalitions)
+            else:
+                coalitions = self.cloud_llm._last_coalitions or []
 
-        cloud_reasoned = not (reused_assignments and not pending_subtasks)
+        cloud_reasoned = bool(
+            (need_decompose and not (reused_assignments and not pending_subtasks))
+            or need_coalitions
+        )
 
         if self.continuity_engine is not None:
             self.continuity_engine.set_active_plan(assignments_map, coalitions, subtasks, mode=0)
 
-        # New plan always requires dispatch
+        # Dispatch updated global plan to domain Device LLMs
         dispatch_occurred = self._dispatch_domains(coalitions)
         self._last_dispatched_assignments = dict(assignments_map)
         return assignments_map, coalitions, cloud_reasoned, dispatch_occurred

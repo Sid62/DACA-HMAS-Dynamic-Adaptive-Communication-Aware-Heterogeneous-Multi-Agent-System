@@ -199,6 +199,10 @@ class DACAConfig:
 
         mock_flag = self.use_mock if self.use_mock is not None else bool(llm_cfg.get("use_mock", True))
         c_prov = self.cloud_provider or cloud_cfg.get("provider", "groq")
+        key_env = cloud_cfg.get("api_key_env", f"{c_prov.upper()}_API_KEY")
+        import os
+        if not mock_flag and not os.environ.get(key_env):
+            mock_flag = True
         c_mod = self.cloud_model or cloud_cfg.get("model", "llama-3.3-70b-versatile")
         d_prov = self.device_provider or dev_cfg.get("provider", "vllm")
         d_mod = self.device_model or dev_cfg.get("model", "Qwen/Qwen2.5-3B-Instruct")
@@ -711,7 +715,7 @@ class DACAOrchestrator:
             if mode != prev_mode:
                 prev_mode = mode
 
-            replan_now, replan_reason = should_replan(
+            replan_decision = should_replan(
                 self._plan_state,
                 self.env.subtask_list,
                 fleet,
@@ -730,15 +734,19 @@ class DACAOrchestrator:
                 continuity_engine=self.continuity_engine,
                 cqi_matrix=cqi_matrix,
             )
+            replan_now, replan_reason = replan_decision[0], replan_decision[1]
+            replan_scope = getattr(replan_decision, "scope", "global" if replan_now else "none")
         
-            if replan_now:
-                print(f"[REPLAN] step={step} reason={replan_reason}")
+            if replan_now and replan_scope == "global":
+                print(f"[REPLAN] step={step} reason={replan_reason} scope=global")
                 self.cloud_llm.active_replan_reason = replan_reason
                 prev_membership = dict(self._plan_state.coalition_members)
 
                 t_plan = time.perf_counter()
                 if mode == 0:
-                    assignments, coalitions, cloud_reasoned, dispatch_occurred = self.centralized.plan(self.env, cqi_matrix)
+                    assignments, coalitions, cloud_reasoned, dispatch_occurred = self.centralized.plan(
+                        self.env, cqi_matrix, force_replan=True, replan_reason=replan_reason
+                    )
                     if cloud_reasoned:
                         self.comm_counter.record_global_planning(1, "centralized_global_planning")
                     if dispatch_occurred:
@@ -777,6 +785,23 @@ class DACAOrchestrator:
                     latency=avg_latency,
                     current_step=step,
                 )
+            elif replan_now and replan_scope == "local":
+                print(f"[REPLAN-LOCAL] step={step} reason={replan_reason} scope=local (0 Cloud calls)")
+                if self.continuity_engine is not None and self.continuity_engine.active_context is not None:
+                    assignments = self.continuity_engine.get_updated_executable_assignments(fleet, self.env.subtask_list)
+                    active_coalitions = (
+                        self.continuity_engine.active_context.coalitions
+                        if self.continuity_engine.active_context
+                        else coalitions
+                    )
+                    if mode == 0 and assignments != self.centralized._last_dispatched_assignments:
+                        dispatch_occurred = self.centralized._dispatch_domains(active_coalitions)
+                        if dispatch_occurred:
+                            self.comm_counter.record_dispatch(1, "centralized_domain_dispatch")
+                        self.centralized._last_dispatched_assignments = dict(assignments)
+                    elif mode == 0:
+                        self.centralized.dispatch_skipped_count += 1
+                self._replanning_count += 1
             else:
                 print(f"[REPLAN] step={step} skipped -- reusing existing plan")
                 if self.continuity_engine is not None and self.continuity_engine.active_context is not None:
