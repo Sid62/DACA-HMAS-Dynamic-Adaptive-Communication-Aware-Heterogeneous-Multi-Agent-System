@@ -141,13 +141,14 @@ def test_d_multiple_independent_global_events_generate_multiple_requests():
     coord.plan(env, force_replan=True, replan_reason="mission_initialization")
     assert client.usage.cloud_api_calls == 2
 
-    # Global Event 1: task reassignment needed (+1 call)
+    # Global Event 1: task reassignment needed (+2 calls: decompose + form_coalitions)
     coord.plan(env, force_replan=True, replan_reason="task_completed_needs_reassignment:['T_0']")
-    assert client.usage.cloud_api_calls == 3
-
-    # Global Event 2: network degradation crossed threshold (+1 call)
-    coord.plan(env, force_replan=True, replan_reason="packet_loss_crossed_threshold:0.450")
     assert client.usage.cloud_api_calls == 4
+
+    # Global Event 2: network degradation crossed threshold (+2 calls: decompose + form_coalitions)
+    coord.plan(env, force_replan=True, replan_reason="packet_loss_crossed_threshold:0.450")
+    assert client.usage.cloud_api_calls == 6
+
 
 
 # --- Test E: Local recoverable problems do not generate unnecessary Cloud calls ---
@@ -202,7 +203,7 @@ def test_g_real_uncached_request_increments_exactly_once():
     assert client.usage.cloud_api_calls == 3
 
 
-# --- Test H: should_replan() global decision cannot be swallowed by continuity gate ---
+# --- Test H: Continuity check is the single unconditional authoritative gate ---
 def test_h_double_gating_bypass_verified():
     client = CloudLLMClient(config={"use_mock": True, "cache_responses": False})
     engine = PlanContinuityEngine(r_reach=100.0)
@@ -220,12 +221,13 @@ def test_h_double_gating_bypass_verified():
             return {"instruction": "task", "agents": fleet.to_dict_list(), "subtasks": [{"id": st.subtask_id, "skills": st.required_skills, "target": [10.0, 10.0]}]}
 
     env = DummyEnv()
-    # When force_replan=True, plan() MUST NOT return (cloud_reasoned=False)
+    # When continuity reports plan is still valid, plan() reuses plan with cloud_reasoned=False and 0 calls even if force_replan=True
     assignments, coalitions, cloud_reasoned, dispatch_occurred = coord.plan(
         env, force_replan=True, replan_reason="task_completed_needs_reassignment:['T_0']"
     )
-    assert cloud_reasoned is True
-    assert client.usage.cloud_api_calls >= 1
+    assert cloud_reasoned is False
+    assert client.usage.cloud_api_calls == 0
+
 
 
 # --- Test I: Same seed + same configuration produces deterministic API counts ---

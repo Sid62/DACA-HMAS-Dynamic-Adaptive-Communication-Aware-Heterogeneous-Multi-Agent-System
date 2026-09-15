@@ -166,11 +166,10 @@ def test_g_global_replan_with_one_invalid_artifact():
     coord.plan(env, force_replan=True, replan_reason="mission_initialization")
     assert client.usage.cloud_planning_calls == 2
 
-    # Global replan with decomposition invalid ONLY
+    # Global replan: always executes full replan (decompose + form_coalitions together = +2)
     coord.plan(env, force_replan=True, replan_reason="task_reassignment", invalid_artifacts={"decomposition"})
-    # Exactly +1 Cloud operation occurs
-    assert client.usage.cloud_planning_calls == 3
-    assert client.usage.cloud_api_calls == 3
+    assert client.usage.cloud_planning_calls == 4
+    assert client.usage.cloud_api_calls == 4
 
 
 # ── Test H: Global replan with multiple invalid artifacts ─────────────────────
@@ -201,19 +200,19 @@ def test_i_repeated_valid_global_replans():
     coord.plan(env, force_replan=True, replan_reason="mission_initialization")
     assert client.usage.cloud_planning_calls == 2
 
-    # Sequence of valid global replanning events
+    # Sequence of valid global replanning events: each adds +2
     coord.plan(env, force_replan=True, replan_reason="task_completed_needs_reassignment:['T_0']")
-    assert client.usage.cloud_planning_calls == 3
-
-    coord.plan(env, force_replan=True, replan_reason="packet_loss_crossed_threshold:0.50")
     assert client.usage.cloud_planning_calls == 4
 
+    coord.plan(env, force_replan=True, replan_reason="packet_loss_crossed_threshold:0.50")
+    assert client.usage.cloud_planning_calls == 6
+
     coord.plan(env, force_replan=True, replan_reason="cqi_changed_significantly:0.35")
-    assert client.usage.cloud_planning_calls == 5
+    assert client.usage.cloud_planning_calls == 8
 
     # Proves the system is NOT permanently locked at 2
     assert client.usage.cloud_planning_calls > 2
-    assert client.usage.cloud_api_calls == 5
+    assert client.usage.cloud_api_calls == 8
 
 
 # ── Test J: Local repair (0 additional Cloud calls) ───────────────────────────
@@ -458,7 +457,7 @@ def test_3_cloud_cache_hit_no_increase(tmp_path):
     assert client.usage.cloud_planning_calls == 1
 
 
-def test_4_existing_runtime_replan_increases_by_one():
+def test_4_existing_runtime_replan_increases_by_two():
     client = CloudLLMClient(config={"use_mock": True, "cache_responses": False})
     client.semantic_cache.enabled = False
     coord = CentralizedHybridCoordinator(cloud_llm=client)
@@ -466,12 +465,13 @@ def test_4_existing_runtime_replan_increases_by_one():
     coord.plan(env, force_replan=True, replan_reason="mission_initialization")
     initial_calls = client.usage.cloud_planning_calls
     coord.plan(env, force_replan=True, replan_reason="task_reassignment", invalid_artifacts={"decomposition"})
-    assert client.usage.cloud_planning_calls == initial_calls + 1
+    assert client.usage.cloud_planning_calls == initial_calls + 2
 
 
 def test_5_no_cloud_execution_no_increase():
     client = CloudLLMClient(config={"use_mock": True, "cache_responses": False})
-    coord = CentralizedHybridCoordinator(cloud_llm=client)
+    cont = PlanContinuityEngine(r_reach=100.0)
+    coord = CentralizedHybridCoordinator(cloud_llm=client, continuity_engine=cont)
     env = _create_mock_env()
     coord.plan(env, force_replan=True, replan_reason="mission_initialization")
     calls_after_init = client.usage.cloud_planning_calls
