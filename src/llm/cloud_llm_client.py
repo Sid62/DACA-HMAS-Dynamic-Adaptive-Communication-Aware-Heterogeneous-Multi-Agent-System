@@ -26,8 +26,7 @@ class LLMUsage:
     completion_tokens: int = 0
     total_tokens: int = 0
     retry_tokens: int = 0
-    api_calls: int = 0
-    cloud_api_calls: int = 0
+    cloud_planning_calls: int = 0  # Authoritative SSoT counter for actual uncached Cloud planner operations
     logical_requests: int = 0
     successful_calls: int = 0
     failed_calls: int = 0
@@ -36,6 +35,16 @@ class LLMUsage:
     cloud_bytes: int = 0
     llm_wait_s: float = 0.0
     cloud_inference_time_s: float = 0.0
+
+    @property
+    def cloud_api_calls(self) -> int:
+        """Single Source of Truth: exact read-only property alias of cloud_planning_calls."""
+        return self.cloud_planning_calls
+
+    @property
+    def api_calls(self) -> int:
+        """Single Source of Truth: exact read-only property alias of cloud_planning_calls."""
+        return self.cloud_planning_calls
 
     # Measured provider tokens (reported directly by provider API usage)
     measured_prompt_tokens: int = 0
@@ -99,8 +108,7 @@ class LLMUsage:
         self.completion_tokens = 0
         self.total_tokens = 0
         self.retry_tokens = 0
-        self.api_calls = 0
-        self.cloud_api_calls = 0
+        self.cloud_planning_calls = 0
         self.logical_requests = 0
         self.successful_calls = 0
         self.failed_calls = 0
@@ -374,53 +382,55 @@ class CloudLLMClient:
     # ------------------------------------------------------------------
     def complete(self, prompt: str, system: str = "", caller: str = "") -> str:
         self.usage.logical_requests += 1
+        lr = self.usage.logical_requests
         t_start = time.perf_counter()
         step = getattr(self, "current_step", 0)
         cache_path = self._cache_path(prompt)
         if cache_path:
             cached = self._read_cache(cache_path)
             if cached:
-                before = self.usage.cloud_api_calls
-                # Option A (Actual HTTP/API requests): Cache hit does NOT increment cloud_api_calls network request counter!
                 self.usage.cloud_disk_cache_hits += 1
                 self.usage.record_call_category(caller, getattr(self, "active_replan_reason", None))
                 self.usage.cache_hits += 1
                 self.usage.successful_calls += 1
-                after = self.usage.cloud_api_calls
                 elapsed = time.perf_counter() - t_start
                 self.usage.llm_wait_s += elapsed
                 self.usage.cloud_inference_time_s += elapsed
                 p_bytes = len(prompt.encode("utf-8")) + len(cached["response"].encode("utf-8"))
                 self.usage.cloud_bytes += p_bytes
-                print(f"[COUNTER] metric=cloud_planning_calls step={step} before={before} after={after} reason={caller or 'cloud_complete'} caller=CloudLLMClient.complete()")
-                print(f"[CLOUD_COMPLETE] timestamp={time.time():.4f} step={step} caller={caller or 'cloud_complete'} provider={self.config.get('cloud', {}).get('provider', 'groq')} mock={self.config.get('use_mock', True)} before={before} after={after} prompt_chars={len(prompt)} latency={elapsed:.4f}s")
+                print(
+                    f"[CLOUD_CACHE_HIT] caller={caller or 'cloud_complete'} logical_request={lr} "
+                    f"physical=false cloud_planning_calls={self.usage.cloud_planning_calls} "
+                    f"cloud_api_calls={self.usage.cloud_api_calls}"
+                )
                 return cached["response"]
 
         if self.config.get("use_mock", True):
-            before = self.usage.cloud_api_calls
+            self.usage.cloud_planning_calls += 1
+            call_id = self.usage.cloud_planning_calls
             response = self._mock_response(prompt)
             p_tok = len(prompt.split())
             c_tok = len(response.split())
             t_tok = p_tok + c_tok
             self.usage.record_estimated_tokens(p_tok, c_tok, t_tok)
             self.usage.cloud_network_calls += 1
-            self.usage.cloud_api_calls += 1
-            self.usage.api_calls = self.usage.cloud_api_calls
             self.usage.record_call_category(caller, getattr(self, "active_replan_reason", None))
             self.usage.successful_calls += 1
-            after = self.usage.cloud_api_calls
             elapsed = time.perf_counter() - t_start
             self.usage.llm_wait_s += elapsed
             self.usage.cloud_inference_time_s += elapsed
             p_bytes = len(prompt.encode("utf-8")) + len(response.encode("utf-8"))
             self.usage.cloud_bytes += p_bytes
-            print(f"[COUNTER] metric=cloud_planning_calls step={step} before={before} after={after} reason={caller or 'cloud_complete'} caller=CloudLLMClient.complete()")
-            print(f"[CLOUD_COMPLETE] timestamp={time.time():.4f} step={step} caller={caller or 'cloud_complete'} provider={self.config.get('cloud', {}).get('provider', 'groq')} mock=True before={before} after={after} prompt_chars={len(prompt)} latency={elapsed:.4f}s")
+            print(
+                f"[CLOUD_CALL] call_id={call_id} caller={caller or 'cloud_complete'} "
+                f"logical_request={lr} cache_hit=false physical=true "
+                f"cloud_planning_calls={self.usage.cloud_planning_calls} "
+                f"cloud_api_calls={self.usage.cloud_api_calls}"
+            )
             if cache_path:
                 self._write_cache(cache_path, {"response": response, "tokens": t_tok, "prompt_tokens": p_tok, "completion_tokens": c_tok, "is_measured": False})
             return response
 
-        before = self.usage.cloud_api_calls
         call_res = self._call_with_retries(prompt, system)
         if len(call_res) == 5:
             response, p_tok, c_tok, t_tok, is_measured = call_res
@@ -430,22 +440,25 @@ class CloudLLMClient:
         if response == _FAILURE_SENTINEL:
             self.usage.failed_calls += 1
             return response
+        self.usage.cloud_planning_calls += 1
+        call_id = self.usage.cloud_planning_calls
         if is_measured:
             self.usage.record_measured_tokens(p_tok, c_tok, t_tok)
         else:
             self.usage.record_estimated_tokens(p_tok, c_tok, t_tok)
-        self.usage.cloud_api_calls += 1
-        self.usage.api_calls = self.usage.cloud_api_calls
         self.usage.record_call_category(caller, getattr(self, "active_replan_reason", None))
         self.usage.successful_calls += 1
-        after = self.usage.cloud_api_calls
         elapsed = time.perf_counter() - t_start
         self.usage.llm_wait_s += elapsed
         self.usage.cloud_inference_time_s += elapsed
         p_bytes = len(prompt.encode("utf-8")) + len(response.encode("utf-8"))
         self.usage.cloud_bytes += p_bytes
-        print(f"[COUNTER] metric=cloud_planning_calls step={step} before={before} after={after} reason={caller or 'cloud_complete'} caller=CloudLLMClient.complete()")
-        print(f"[CLOUD_COMPLETE] timestamp={time.time():.4f} step={step} caller={caller or 'cloud_complete'} provider={self.config.get('cloud', {}).get('provider', 'groq')} mock=False before={before} after={after} prompt_chars={len(prompt)} latency={elapsed:.4f}s")
+        print(
+            f"[CLOUD_CALL] call_id={call_id} caller={caller or 'cloud_complete'} "
+            f"logical_request={lr} cache_hit=false physical=true "
+            f"cloud_planning_calls={self.usage.cloud_planning_calls} "
+            f"cloud_api_calls={self.usage.cloud_api_calls}"
+        )
         if cache_path:
             self._write_cache(cache_path, {"response": response, "tokens": t_tok, "prompt_tokens": p_tok, "completion_tokens": c_tok, "is_measured": is_measured})
         return response
@@ -809,7 +822,14 @@ class CloudLLMClient:
         )
         if cached_plan is not None:
             self._last_assignments = cached_plan
+            self.usage.logical_requests += 1
             self.usage.cache_hits += 1
+            lr = self.usage.logical_requests
+            print(
+                f"[CLOUD_CACHE_HIT] caller=decompose logical_request={lr} "
+                f"physical=false cloud_planning_calls={self.usage.cloud_planning_calls} "
+                f"cloud_api_calls={self.usage.cloud_api_calls}"
+            )
             return cached_plan
 
         # Optimization 2: Compressed Prompting
@@ -951,7 +971,14 @@ class CloudLLMClient:
         )
         if cached_coalitions is not None:
             self._last_coalitions = cached_coalitions
+            self.usage.logical_requests += 1
             self.usage.cache_hits += 1
+            lr = self.usage.logical_requests
+            print(
+                f"[CLOUD_CACHE_HIT] caller=form_coalitions logical_request={lr} "
+                f"physical=false cloud_planning_calls={self.usage.cloud_planning_calls} "
+                f"cloud_api_calls={self.usage.cloud_api_calls}"
+            )
             return cached_coalitions
 
         # Optimization 2: Compressed Prompting

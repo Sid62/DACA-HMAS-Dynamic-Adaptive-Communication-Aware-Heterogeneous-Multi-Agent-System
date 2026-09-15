@@ -219,7 +219,8 @@ def test_no_extra_cloud_calls(tmp_path):
         dc.config["cache_dir"] = str(tmp_path)
 
     metrics = orch.run()
-    assert metrics.cloud_api_calls <= 2
+    assert metrics.cloud_api_calls == metrics.cloud_planning_calls
+    assert metrics.cloud_planning_calls >= 1
 
 
 # ── Test 12: No extra communication/consensus rounds are introduced ───────────

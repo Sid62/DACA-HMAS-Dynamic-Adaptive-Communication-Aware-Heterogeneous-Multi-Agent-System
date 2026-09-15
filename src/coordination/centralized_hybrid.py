@@ -141,6 +141,7 @@ class CentralizedHybridCoordinator:
         cqi_matrix: np.ndarray | None = None,
         force_replan: bool = False,
         replan_reason: str | None = None,
+        invalid_artifacts: set[str] | list[str] | None = None,
     ) -> tuple[dict[str, list[str]], list[dict], bool, bool]:
         """Plan and dispatch.
 
@@ -150,6 +151,8 @@ class CentralizedHybridCoordinator:
             force_replan: If True, indicates an approved global replan decision
                           from should_replan() that must not be vetoed by continuity.
             replan_reason: Triggering reason string for selective replanning.
+            invalid_artifacts: Specific set of planning artifacts that are invalid
+                               (e.g., {"decomposition"}, {"coalitions"}, or both).
 
         Returns:
             (assignments, coalitions, cloud_reasoned, dispatch_occurred)
@@ -184,31 +187,54 @@ class CentralizedHybridCoordinator:
         if cqi_matrix is None:
             cqi_matrix = np.ones(dist_mat.shape)
 
-        # --- Event-Driven Selective Cloud Replanning ---
+        # --- Dynamic Planning Artifact Invalidation ---
         # Determine whether decomposition, coalition formation, or both require Cloud reasoning.
         effective_reason = str(replan_reason or "").lower()
-        is_initial = (
-            "mission_initialization" in effective_reason
-            or (self.continuity_engine is not None and self.continuity_engine.active_context is None)
-            or (not self._last_dispatched_assignments and not getattr(self.cloud_llm, "_last_assignments", {}))
+        has_prior_plan = bool(
+            (self.continuity_engine is not None and self.continuity_engine.active_context is not None)
+            or bool(self._last_dispatched_assignments)
+            or bool(getattr(self.cloud_llm, "_last_assignments", {}))
         )
-        is_reassign_only = (
-            "task_completed_needs_reassignment" in effective_reason
-            or "new_subtask_discovered" in effective_reason
-        )
-        is_comm_only = (
-            "cqi_changed_significantly" in effective_reason
-            or "packet_loss_crossed_threshold" in effective_reason
-            or "latency_crossed_threshold" in effective_reason
-            or "coalition_invalidated" in effective_reason
-            or "coalition_membership_changed" in effective_reason
-        )
+        is_initial = "mission_initialization" in effective_reason or not has_prior_plan
 
         reused_assignments = self._try_experience_reuse(env, fleet, subtasks)
         pending_subtasks = [s for s in subtasks if not s.completed and s.subtask_id not in reused_assignments]
 
-        need_decompose = is_initial or is_reassign_only or (not is_comm_only)
-        need_coalitions = is_initial or is_comm_only or (not is_reassign_only)
+        if invalid_artifacts is not None:
+            artifacts_set = {str(a).lower() for a in invalid_artifacts}
+            need_decompose = bool(artifacts_set & {"decomposition", "tasks", "subtasks", "task_decomposition", "task_allocation"})
+            need_coalitions = bool(artifacts_set & {"coalitions", "coalition_structure", "coalition", "allocation"})
+        elif is_initial:
+            need_decompose = True
+            need_coalitions = True
+        else:
+            # Determine actual invalidity of artifacts from runtime state and triggering conditions
+            # 1. Decomposition/Task Allocation invalidity:
+            assigned_subtasks = {sid for sid, aids in self._last_dispatched_assignments.items() if aids}
+            unassigned_pending = [s for s in subtasks if not s.completed and s.subtask_id not in assigned_subtasks]
+            decomp_invalid = bool(unassigned_pending) or any(k in effective_reason for k in (
+                "task_completed_needs_reassignment", "new_subtask_discovered", "task_reassignment",
+                "decomposition_invalid", "task_failed", "unassigned_tasks"
+            ))
+
+            # 2. Coalition Structure invalidity:
+            coalition_invalid = any(k in effective_reason for k in (
+                "cqi_changed_significantly", "packet_loss_crossed_threshold", "latency_crossed_threshold",
+                "coalition_invalidated", "coalition_membership_changed", "communication_degradation",
+                "coalition_invalid"
+            ))
+            if not coalition_invalid and self.continuity_engine is not None and self.continuity_engine.active_context is not None:
+                avg_cqi = float(np.mean(cqi_matrix)) if cqi_matrix is not None and cqi_matrix.size > 0 else 1.0
+                if avg_cqi < self.continuity_engine.cqi_min_threshold:
+                    coalition_invalid = True
+
+            # If neither was isolated specifically, evaluate as a general global replan requiring both
+            if not decomp_invalid and not coalition_invalid:
+                decomp_invalid = True
+                coalition_invalid = True
+
+            need_decompose = decomp_invalid
+            need_coalitions = coalition_invalid
 
         # 1. Task Decomposition / Reassignment
         if need_decompose:

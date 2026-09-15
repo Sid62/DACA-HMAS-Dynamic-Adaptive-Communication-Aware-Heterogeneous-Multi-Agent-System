@@ -42,10 +42,19 @@ class DeviceLLMUsage:
     completion_tokens: int = 0
     total_tokens: int = 0
     retry_tokens: int = 0
-    api_calls: int = 0
-    device_api_calls: int = 0
+    device_planning_calls: int = 0  # Authoritative SSoT counter for actual uncached Device planner operations
     device_inference_calls: int = 0
     logical_requests: int = 0
+
+    @property
+    def device_api_calls(self) -> int:
+        """Single Source of Truth: exact read-only property alias of device_planning_calls."""
+        return self.device_planning_calls
+
+    @property
+    def api_calls(self) -> int:
+        """Single Source of Truth: exact read-only property alias of device_planning_calls."""
+        return self.device_planning_calls
     successful_calls: int = 0
     failed_calls: int = 0
     retried_calls: int = 0
@@ -102,8 +111,7 @@ class DeviceLLMUsage:
         self.completion_tokens = 0
         self.total_tokens = 0
         self.retry_tokens = 0
-        self.api_calls = 0
-        self.device_api_calls = 0
+        self.device_planning_calls = 0
         self.device_inference_calls = 0
         self.logical_requests = 0
         self.successful_calls = 0
@@ -212,35 +220,40 @@ class DeviceLLMClient:
         if cache_path and cache_path.exists():
             with open(cache_path, encoding="utf-8") as f:
                 data = json.load(f)
-                before = self.usage.device_api_calls
-                # Cache hit: DO NOT add inference tokens or increment actual device API calls!
+                before = self.usage.device_planning_calls
+                # Cache hit: DO NOT add inference tokens or increment actual device planning calls!
                 self.usage.cache_hits += 1
                 self.usage.successful_calls += 1
-                after = self.usage.device_api_calls
+                after = self.usage.device_planning_calls
                 cache_hit = True
                 elapsed = time.perf_counter() - t_start
                 self.usage.llm_wait_s += elapsed
                 self.usage.device_inference_time_s += elapsed
                 print(f"[COUNTER] metric=device_planning_calls step={step} before={before} after={after} reason={caller} caller=DeviceLLMClient.complete()")
                 print(f"[DEVICE_COMPLETE] timestamp={time.time():.4f} step={step} caller={caller} domain={self.node_id} coalition_id={coalition_id} cache=HIT latency={elapsed:.4f}s")
+                print(
+                    f"[DEVICE_CACHE_HIT] caller={caller} domain={self.node_id} "
+                    f"logical_request={self.usage.logical_requests} physical=false "
+                    f"device_planning_calls={self.usage.device_planning_calls} "
+                    f"device_api_calls={self.usage.device_api_calls}"
+                )
                 return data["response"]
 
         if self.config.get("use_mock", True):
-            before = self.usage.device_api_calls
+            before = self.usage.device_planning_calls
             response = self._mock_response(prompt)
             p_tok = len(prompt.split())
             c_tok = len(response.split())
             t_tok = p_tok + c_tok
             self.usage.record_estimated_tokens(p_tok, c_tok, t_tok)
             self.usage.device_inference_calls += 1
-            self.usage.device_api_calls += 1
-            self.usage.api_calls = self.usage.device_api_calls
+            self.usage.device_planning_calls += 1
             self.usage.successful_calls += 1
 
             elapsed = time.perf_counter() - t_start
             self.usage.llm_wait_s += elapsed
             self.usage.device_inference_time_s += elapsed
-            after = before + 1
+            after = self.usage.device_planning_calls
 
             rss_after = proc.memory_info().rss
             snapshot_after = tracemalloc.take_snapshot() if tracemalloc.is_tracing() else None
@@ -260,12 +273,21 @@ class DeviceLLMClient:
             self.usage.memory_mb = rss_after / (1024 * 1024)
             self.usage.python_heap_delta_mb = max(self.usage.python_heap_delta_mb, heap_delta_mb)
 
+            print(f"[COUNTER] metric=device_planning_calls step={step} before={before} after={after} reason={caller} caller=DeviceLLMClient.complete()")
+            print(f"[DEVICE_COMPLETE] timestamp={time.time():.4f} step={step} caller={caller} domain={self.node_id} coalition_id={coalition_id} cache=MISS latency={elapsed:.4f}s")
+            print(
+                f"[DEVICE_CALL] caller={caller} domain={self.node_id} "
+                f"logical_request={self.usage.logical_requests} cache_hit=false physical=true "
+                f"device_planning_calls={self.usage.device_planning_calls} "
+                f"device_api_calls={self.usage.device_api_calls}"
+            )
+
             if cache_path:
                 with open(cache_path, "w", encoding="utf-8") as f:
                     json.dump({"response": response, "tokens": t_tok, "prompt_tokens": p_tok, "completion_tokens": c_tok, "is_measured": False}, f)
             return response
         else:
-            before = self.usage.device_api_calls
+            before = self.usage.device_planning_calls
             provider = self.config.get("device", {}).get("provider", "ollama")
             start = time.perf_counter()
             is_measured = True
@@ -291,13 +313,12 @@ class DeviceLLMClient:
             else:
                 self.usage.record_estimated_tokens(p_tok, c_tok, t_tok)
             self.usage.device_inference_calls += 1
-            self.usage.device_api_calls += 1
-            self.usage.api_calls = self.usage.device_api_calls
+            self.usage.device_planning_calls += 1
             self.usage.successful_calls += 1
 
             self.usage.llm_wait_s += elapsed
             self.usage.device_inference_time_s += elapsed
-            after = before + 1
+            after = self.usage.device_planning_calls
 
             rss_after = proc.memory_info().rss
             snapshot_after = tracemalloc.take_snapshot() if tracemalloc.is_tracing() else None
@@ -319,6 +340,12 @@ class DeviceLLMClient:
 
             print(f"[COUNTER] metric=device_planning_calls step={step} before={before} after={after} reason={caller} caller=DeviceLLMClient.complete()")
             print(f"[DEVICE_COMPLETE] timestamp={time.time():.4f} step={step} caller={caller} domain={self.node_id} coalition_id={coalition_id} cache=MISS latency={elapsed:.4f}s")
+            print(
+                f"[DEVICE_CALL] caller={caller} domain={self.node_id} "
+                f"logical_request={self.usage.logical_requests} cache_hit=false physical=true "
+                f"device_planning_calls={self.usage.device_planning_calls} "
+                f"device_api_calls={self.usage.device_api_calls}"
+            )
             if cache_path:
                 with open(cache_path, "w", encoding="utf-8") as f:
                     json.dump({"response": response, "tokens": t_tok, "prompt_tokens": p_tok, "completion_tokens": c_tok, "is_measured": is_measured}, f)
@@ -872,8 +899,7 @@ def aggregate_device_usage(device_llms: dict[str, DeviceLLMClient]) -> DeviceLLM
         total.retry_tokens += client.usage.retry_tokens
         total.logical_requests += client.usage.logical_requests
         total.device_inference_calls += client.usage.device_inference_calls
-        total.device_api_calls += client.usage.device_api_calls
-        total.api_calls = total.device_api_calls
+        total.device_planning_calls += client.usage.device_planning_calls
         total.successful_calls += client.usage.successful_calls
         total.failed_calls += client.usage.failed_calls
         total.retried_calls += client.usage.retried_calls
