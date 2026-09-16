@@ -41,6 +41,7 @@ class CentralizedHybridCoordinator:
     # Delta dispatch: track last dispatched assignment state to suppress
     # redundant Device LLM dispatch calls when assignments haven't changed.
     _last_dispatched_assignments: dict[str, list[str]] = field(default_factory=dict)
+    _last_dispatched_sig: tuple = field(default_factory=tuple)
     dispatch_skipped_count: int = 0
 
     def __post_init__(self) -> None:
@@ -64,12 +65,24 @@ class CentralizedHybridCoordinator:
                 scoped.append({**coalition, "members": domain_members})
         return scoped
 
-    def _dispatch_domains(self, coalitions: list[dict]) -> bool:
+    def _dispatch_domains(self, coalitions: list[dict], assignments: dict[str, list[str]] | None = None) -> bool:
         """Each domain Device LLM dispatches to its managed agents only.
+
+        Delta-based dispatch: Computes directive signature based on active assignments
+        and coalition memberships. If the directive has not changed, skips dispatch.
 
         Returns:
             bool: True if at least one domain Device LLM dispatch was performed.
         """
+        # Form stable signature of effective dispatch state
+        assign_items = tuple(sorted((sid, tuple(sorted(aids))) for sid, aids in (assignments or self._last_dispatched_assignments).items() if aids))
+        coalition_items = tuple(sorted(tuple(sorted(c.get("members", []))) for c in coalitions if c.get("members")))
+        sig = (assign_items, coalition_items)
+
+        if hasattr(self, "_last_dispatched_sig") and self._last_dispatched_sig == sig and sig != ((), ()):
+            self.dispatch_skipped_count += 1
+            return False
+
         dispatched = False
         if self.device_llms:
             for client in self.device_llms.values():
@@ -80,6 +93,9 @@ class CentralizedHybridCoordinator:
                     dispatched = True
         elif coalitions:
             dispatched = any(bool(c.get("members")) for c in coalitions)
+
+        if dispatched:
+            self._last_dispatched_sig = sig
         return dispatched
 
     def _try_experience_reuse(
@@ -239,7 +255,30 @@ class CentralizedHybridCoordinator:
 
         # 2. Coalition Formation / Refinement
         if need_coalitions:
-            if self.use_coalition_feasibility and self.coalition_formation:
+            # Check if existing coalitions remain feasible before invoking Cloud
+            existing_coalitions = (
+                list(self.continuity_engine.active_context.coalitions)
+                if self.continuity_engine and self.continuity_engine.active_context
+                else getattr(self.cloud_llm, "_last_coalitions", [])
+            )
+            coalitions_valid = False
+            if not force_replan and is_comm_only and existing_coalitions:
+                from src.coalition.feasibility import build_psi_matrix, validate_coalition_members
+                id_to_idx = {a.agent_id: i for i, a in enumerate(fleet.agents)}
+                c1_thresh = 50.0
+                psi = build_psi_matrix(dist_mat, cqi_matrix, c1_thresh)
+                all_ok = True
+                for c in existing_coalitions:
+                    m = c.get("members", [])
+                    if not m or not validate_coalition_members(m, id_to_idx, psi, 0.3):
+                        all_ok = False
+                        break
+                coalitions_valid = all_ok
+
+            if coalitions_valid:
+                print("[SELECTIVE-REPLAN] Communication event: existing coalitions remain feasible (0 Cloud coalition calls)")
+                coalitions = existing_coalitions
+            elif self.use_coalition_feasibility and self.coalition_formation:
                 coalitions = self.coalition_formation.form(
                     fleet, subtasks, dist_mat, cqi_matrix
                 )
@@ -259,14 +298,14 @@ class CentralizedHybridCoordinator:
 
         cloud_reasoned = bool(
             (need_decompose and not (reused_assignments and not pending_subtasks))
-            or need_coalitions
+            or (need_coalitions and not coalitions_valid if 'coalitions_valid' in locals() else need_coalitions)
         )
 
         if self.continuity_engine is not None:
             self.continuity_engine.set_active_plan(assignments_map, coalitions, subtasks, mode=0)
 
-        # Dispatch updated global plan to domain Device LLMs
-        dispatch_occurred = self._dispatch_domains(coalitions)
+        # Dispatch updated global plan to domain Device LLMs (delta-based)
+        dispatch_occurred = self._dispatch_domains(coalitions, assignments=assignments_map)
         self._last_dispatched_assignments = dict(assignments_map)
         return assignments_map, coalitions, cloud_reasoned, dispatch_occurred
 

@@ -161,13 +161,12 @@ class PostSwitchReallocator:
                         "capability_violation", mode_changed
                     )
 
-                # Joint distance feasibility for subtask
-                if not validate_joint_assignment(
-                    assigned, s, fleet, c_task, r_reach
-                ):
-                    return self._record_trigger(
-                        "assignment_invalid", mode_changed
-                    )
+                # Target reachability feasibility for assigned agents in transit
+                for aid in assigned:
+                    if dist(agent_map[aid].position, s.target) > r_reach:
+                        return self._record_trigger(
+                            "assignment_invalid", mode_changed
+                        )
 
         # State is fully valid after switch -- continue without replanning
         return self._record_skip("state_valid_after_switch", mode_changed)

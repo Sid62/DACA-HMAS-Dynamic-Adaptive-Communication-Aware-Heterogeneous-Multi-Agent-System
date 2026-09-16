@@ -107,16 +107,28 @@ def should_replan(
 
     # --- Trigger 1b: Architecture switch -----------------------------------
     # Evaluate Plan Continuity on architecture switch (Centralized <-> Decentralized).
-    # If the active plan is still valid (V_plan >= threshold), preserve and continue execution!
+    # Decouple architecture adaptation from mission replanning: check structural feasibility
+    # and attempt local repair before falling back to expensive Cloud replanning.
     if plan_state.known_mode == -1:
         plan_state.known_mode = mode
     elif mode != plan_state.known_mode:
-        if continuity_engine is not None:
-            if continuity_engine.can_continue_plan(
-                fleet, subtasks, cqi_matrix, sys_cqi, packet_loss, latency
+        if continuity_engine is not None and continuity_engine.active_context is not None:
+            # 1. Switch-specific execution continuity (decoupled from communication degradation)
+            if hasattr(continuity_engine, "can_continue_after_switch") and continuity_engine.can_continue_after_switch(
+                fleet, subtasks, mode, cqi_matrix=cqi_matrix
             ):
                 plan_state.known_mode = mode  # Record absorbed switch to prevent re-triggering
                 return ReplanDecision(False, "", scope="none")
+            # 2. Local repair fallback before invoking Cloud replan
+            repaired = continuity_engine.get_updated_executable_assignments(fleet, subtasks)
+            has_executable_work = any(len(aids) > 0 for aids in repaired.values())
+            if has_executable_work:
+                plan_state.known_mode = mode
+                return ReplanDecision(
+                    True,
+                    f"architecture_switched_locally_repaired:{plan_state.known_mode}->{mode}",
+                    scope="local",
+                )
         return ReplanDecision(True, f"architecture_switched:{plan_state.known_mode}->{mode}", scope="global")
 
     # --- Rate limiter: everything below this line is subject to the

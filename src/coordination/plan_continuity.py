@@ -397,6 +397,29 @@ class PlanContinuityEngine:
                         cleaned[sid] = [best]
                         free_agents.remove(best)
                         busy_agents.add(best)
+                    else:
+                        # Complementary pair covering required skills with both agents within reach
+                        best_pair = None
+                        best_pair_cost = float("inf")
+                        free_list = sorted(list(free_agents))
+                        for i in range(len(free_list)):
+                            for j in range(i + 1, len(free_list)):
+                                a1, a2 = free_list[i], free_list[j]
+                                if req_skills.issubset(set(agent_map[a1].skills) | set(agent_map[a2].skills)):
+                                    d1 = dist(agent_map[a1].position, st.target)
+                                    d2 = dist(agent_map[a2].position, st.target)
+                                    if d1 <= 100.0 and d2 <= 100.0:
+                                        aff1 = domain_skill_affinity(agent_map[a1], req_skills)
+                                        aff2 = domain_skill_affinity(agent_map[a2], req_skills)
+                                        cost = (aff1 + aff2) * 100.0 + d1 + d2
+                                        if cost < best_pair_cost:
+                                            best_pair_cost = cost
+                                            best_pair = (a1, a2)
+                        if best_pair:
+                            cleaned[sid] = list(best_pair)
+                            free_agents.remove(best_pair[0])
+                            free_agents.remove(best_pair[1])
+                            busy_agents.update(best_pair)
 
         return cleaned
 
@@ -487,9 +510,9 @@ class PlanContinuityEngine:
                             for j in range(i + 1, len(freed_list)):
                                 aid1, aid2 = freed_list[i], freed_list[j]
                                 if req_skills.issubset(set(agent_map[aid1].skills) | set(agent_map[aid2].skills)):
-                                    if validate_joint_assignment([aid1, aid2], st, fleet, self.c_task, self.r_reach):
-                                        d1 = dist(agent_map[aid1].position, st.target)
-                                        d2 = dist(agent_map[aid2].position, st.target)
+                                    d1 = dist(agent_map[aid1].position, st.target)
+                                    d2 = dist(agent_map[aid2].position, st.target)
+                                    if d1 <= self.r_reach and d2 <= self.r_reach:
                                         aff1 = domain_skill_affinity(agent_map[aid1], req_skills)
                                         aff2 = domain_skill_affinity(agent_map[aid2], req_skills)
                                         cost = (aff1 + aff2) * 100.0 + d1 + d2
@@ -572,6 +595,59 @@ class PlanContinuityEngine:
 
         # 4. Quantitative Plan Validity check:
         if not score.is_valid:
+            return False
+
+        return True
+
+    def can_continue_after_switch(
+        self,
+        fleet: AgentFleet,
+        subtasks: Sequence[Subtask],
+        mode: int = 0,
+        cqi_matrix: np.ndarray | None = None,
+    ) -> bool:
+        """Return True if active mission plan remains structurally and execution-wise valid
+        across an architecture switch (Centralized <-> Decentralized), decoupled from
+        communication quality degradation."""
+        if self.active_context is None:
+            return False
+
+        completed_ids = self.active_context.completed_subtask_ids | {
+            s.subtask_id for s in subtasks if s.completed
+        }
+        incomplete_subtasks = [
+            s for s in subtasks if s.subtask_id not in completed_ids and not s.completed
+        ]
+        if not incomplete_subtasks:
+            return True
+
+        from src.decomposition.distance_feasible_decomp import validate_assignment_skills
+
+        agent_map = {a.agent_id: a for a in fleet.agents}
+        # 1. Hard agent availability, skill coverage, and reachability
+        for st in incomplete_subtasks:
+            assigned = self.active_context.assignments.get(st.subtask_id, [])
+            if assigned:
+                if any(aid not in agent_map for aid in assigned):
+                    return False
+                if not validate_assignment_skills(assigned, st, fleet):
+                    return False
+                # Reachability to target (allow transit envelope 2 * r_reach)
+                if any(dist(agent_map[aid].position, st.target) > 2.0 * self.r_reach for aid in assigned):
+                    return False
+
+        # 2. Coalition structural validity
+        for c in self.active_context.coalitions:
+            members = c.get("members", [])
+            if not members:
+                continue
+            if any(m not in agent_map for m in members):
+                return False
+
+        # 3. Check if updated executable assignments produce executable work
+        updated = self.get_updated_executable_assignments(fleet, subtasks)
+        has_executable_work = any(len(aids) > 0 for aids in updated.values())
+        if not has_executable_work and incomplete_subtasks:
             return False
 
         return True

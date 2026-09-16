@@ -787,6 +787,7 @@ class DACAOrchestrator:
                 )
             elif replan_now and replan_scope == "local":
                 print(f"[REPLAN-LOCAL] step={step} reason={replan_reason} scope=local (0 Cloud calls)")
+                self._plan_state.last_replan_step = step
                 if self.continuity_engine is not None and self.continuity_engine.active_context is not None:
                     assignments = self.continuity_engine.get_updated_executable_assignments(fleet, self.env.subtask_list)
                     active_coalitions = (
@@ -795,13 +796,15 @@ class DACAOrchestrator:
                         else coalitions
                     )
                     if mode == 0 and assignments != self.centralized._last_dispatched_assignments:
-                        dispatch_occurred = self.centralized._dispatch_domains(active_coalitions)
+                        dispatch_occurred = self.centralized._dispatch_domains(active_coalitions, assignments=assignments)
                         if dispatch_occurred:
                             self.comm_counter.record_dispatch(1, "centralized_domain_dispatch")
                         self.centralized._last_dispatched_assignments = dict(assignments)
+                        self._replanning_count += 1
                     elif mode == 0:
                         self.centralized.dispatch_skipped_count += 1
-                self._replanning_count += 1
+                    else:
+                        self._replanning_count += 1
             else:
                 print(f"[REPLAN] step={step} skipped -- reusing existing plan")
                 if self.continuity_engine is not None and self.continuity_engine.active_context is not None:
@@ -829,7 +832,7 @@ class DACAOrchestrator:
                             if self.continuity_engine is not None and self.continuity_engine.active_context is not None
                             else coalitions
                         )
-                        dispatch_occurred = self.centralized._dispatch_domains(active_coalitions)
+                        dispatch_occurred = self.centralized._dispatch_domains(active_coalitions, assignments=assignments)
                         if dispatch_occurred:
                             self.comm_counter.record_dispatch(1, "centralized_domain_dispatch")
                         self.centralized._last_dispatched_assignments = dict(assignments)
